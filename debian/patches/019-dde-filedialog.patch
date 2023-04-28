@@ -1,0 +1,2064 @@
+From 51c590500893267965916927c39b706ca00f3d94 Mon Sep 17 00:00:00 2001
+From: xzl <xiangzelong@deepin.org>
+Date: Fri, 28 Apr 2023 11:33:05 +0800
+Subject: [PATCH] dde-filedialog
+
+---
+ gtk/ddefiledialog.c              | 1636 ++++++++++++++++++++++++++++++
+ gtk/gtkfilechooser.h             |   63 ++
+ gtk/gtkfilechooserdialog.c       |    7 +
+ testsuite/gtk/object.c           |   11 +-
+ testsuite/gtk/objects-finalize.c |    5 +
+ testsuite/gtk/templates.c        |   10 +-
+ testsuite/reftests/gtk-reftest.c |   10 +-
+ 7 files changed, 1739 insertions(+), 3 deletions(-)
+ create mode 100644 gtk/ddefiledialog.c
+
+diff --git a/gtk/ddefiledialog.c b/gtk/ddefiledialog.c
+new file mode 100644
+index 0000000..3e11aab
+--- /dev/null
++++ b/gtk/ddefiledialog.c
+@@ -0,0 +1,1636 @@
++#include <gtk/gtk.h>
++#include <gtk/gtkfilechooserprivate.h>
++#include <gtk/gtkfilefilter.h>
++#include <gdk/x11/gdkx.h>
++#ifdef GDK_WINDOWING_WAYLAND
++#include <gdk/wayland/gdkwayland.h>
++#endif
++#include <X11/Xlib.h>
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <fcntl.h>
++
++#define D_STRINGIFY(x) #x
++
++#define DFM_FILEDIALOG_DBUS_SERVER "com.deepin.filemanager.filedialog"
++#define DFM_FILEDIALOGMANAGER_DBUS_PATH "/com/deepin/filemanager/filedialogmanager"
++#define DFM_FILEDIALOG_DBUS_SERVER_X11 "com.deepin.filemanager.filedialog_x11"
++#define DFM_FILEDIALOGMANAGER_DBUS_PATH_X11 "/com/deepin/filemanager/filedialogmanager_x11"
++#define DFM_FILEDIALOG_DBUS_SERVER_WAYLAND "com.deepin.filemanager.filedialog_wayland"
++#define DFM_FILEDIALOGMANAGER_DBUS_PATH_WAYLAND "/com/deepin/filemanager/filedialogmanager_wayland"
++#define DFM_FILEDIALOGMANAGER_DBUS_INTERFACE "com.deepin.filemanager.filedialogmanager"
++#define DFM_FILEDIALOG_DBUS_INTERFACE "com.deepin.filemanager.filedialog"
++
++#ifndef DISABLE_DEBUG
++#define d_debug(...) if (getenv("_d_enable_filedialog_debug")) { printf("In Line: %d, In Function: %s: ", __LINE__, G_STRFUNC); printf(__VA_ARGS__);}
++#else
++#define d_debug(format, ...)
++#endif
++
++#define GTK_OBJECT G_OBJECT
++#define D_EXPORT __attribute__((visibility("default")))
++
++typedef enum {
++    AnyFile = 0,
++    ExistingFile = 1,
++    Directory = 2,
++    ExistingFiles = 3,
++    DirectoryOnly = 4
++} FileMode;
++
++typedef enum {
++    AcceptOpen = 0,
++    AcceptSave = 1
++} AcceptMode;
++
++typedef enum {
++    Rejected = 0,
++    Accepted = 1
++} DialogCode;
++
++typedef enum {
++    ShowDirsOnly                = 0x00000001,
++    DontResolveSymlinks         = 0x00000002,
++    DontConfirmOverwrite        = 0x00000004,
++    DontUseSheet                = 0x00000008,
++    DontUseNativeDialog         = 0x00000010,
++    ReadOnly                    = 0x00000020,
++    HideNameFilterDetails       = 0x00000040,
++    DontUseCustomDirectoryIcons = 0x00000080
++} Option;
++
++//! The code from libgtk+3.0 source
++struct _GtkFileFilter
++{
++  GInitiallyUnowned parent_instance;
++
++  gchar *name;
++  GSList *rules;
++
++  GtkFileFilterFlags needed;
++};
++
++typedef enum {
++  FILTER_RULE_PATTERN,
++  FILTER_RULE_MIME_TYPE,
++  FILTER_RULE_PIXBUF_FORMATS,
++  FILTER_RULE_CUSTOM
++} FilterRuleType;
++
++typedef struct _FilterRule
++{
++  FilterRuleType type;
++  GtkFileFilterFlags needed;
++
++  union {
++    gchar *pattern;
++    gchar *mime_type;
++    GSList *pixbuf_formats;
++    struct {
++      GtkFileFilterFunc func;
++      gpointer data;
++      GDestroyNotify notify;
++    } custom;
++  } u;
++} FilterRule;
++
++static gchar *g_dbus_service = DFM_FILEDIALOG_DBUS_SERVER;
++static gchar *g_dbus_path = DFM_FILEDIALOGMANAGER_DBUS_PATH;
++
++static GSList *
++files_to_strings (GSList  *files,
++          gchar * (*convert_func) (GFile *file))
++{
++  GSList *strings;
++
++  strings = NULL;
++
++  for (; files; files = files->next)
++    {
++      GFile *file;
++      gchar *string;
++
++      file = files->data;
++      string = (* convert_func) (file);
++
++      if (string)
++    strings = g_slist_prepend (strings, string);
++    }
++
++  return g_slist_reverse (strings);
++}
++
++static gchar *
++file_to_uri_with_native_path (GFile *file)
++{
++  gchar *result = NULL;
++  gchar *native;
++
++  native = g_file_get_path (file);
++  if (native)
++    {
++      result = g_filename_to_uri (native, NULL, NULL); /* NULL-GError */
++      g_free (native);
++    }
++
++  return result;
++}
++//! End
++
++static GDBusConnection *
++get_connection (void)
++{
++    static GDBusConnection *connection = NULL;
++    GError *error = NULL;
++
++    if (connection)
++        return connection;
++
++    /* Normally I hate sync calls with UIs, but we need to return NULL
++   * or a GtkSearchEngine as a result of this function.
++   */
++    connection = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, &error);
++
++    if (error)
++    {
++        g_debug ("Couldn't connect to D-Bus session bus, %s", error->message);
++        g_error_free (error);
++        return NULL;
++    }
++
++    /* If connection is set, we know it worked. */
++    g_debug ("Finding out if Tracker is available via D-Bus...");
++
++    return connection;
++}
++
++static gboolean dbus_service_is_exist(const gchar *bus_name, 
++                                      const gchar *object_path)
++{
++    GDBusConnection *dbus_connection = get_connection();
++
++    if (!dbus_connection) {
++        g_warning("Get dbus connection failed\n");
++        return FALSE;
++    }
++    
++    // Determine whether the service exists by whether the interface can call
++    GError *error = NULL;
++    const gchar *method_name = "isUseFileChooserDialog";
++    GVariant *result = g_dbus_connection_call_sync(dbus_connection,
++                                                   bus_name,
++                                                   object_path,
++                                                   DFM_FILEDIALOGMANAGER_DBUS_INTERFACE,
++                                                   method_name,
++                                                   NULL,
++                                                   "(b)",
++                                                   G_DBUS_CALL_FLAGS_NONE,
++                                                   5 * 1000,
++                                                   NULL,
++                                                   &error);
++    if (error) {
++        g_warning("Call \"%s\" is failed, %s", method_name, error->message);
++        g_error_free(error);
++        return FALSE;
++    }
++    
++    return TRUE;
++}
++
++static gboolean x11_dbus_is_exist()
++{
++    return dbus_service_is_exist(DFM_FILEDIALOG_DBUS_SERVER_X11, DFM_FILEDIALOGMANAGER_DBUS_PATH_X11);
++}
++
++static gboolean wayland_dbus_is_exist()
++{
++    return dbus_service_is_exist(DFM_FILEDIALOG_DBUS_SERVER_WAYLAND, DFM_FILEDIALOGMANAGER_DBUS_PATH_WAYLAND);
++}
++
++static GVariant *d_dbus_filedialog_call_sync(const gchar        *object_path,
++                                             const gchar        *interface_name,
++                                             const gchar        *method_name,
++                                             GVariant           *parameters,
++                                             const GVariantType *reply_type,
++                                             GVariant           **reply_data)
++{
++    GDBusConnection *dbus_connection = get_connection();
++
++    if (!dbus_connection) {
++        g_warning("Get dbus connection failed\n");
++
++        return FALSE;
++    }
++
++    GError *error = NULL;
++    GVariant *result = g_dbus_connection_call_sync(dbus_connection,
++                                                   g_dbus_service,
++                                                   object_path,
++                                                   interface_name,
++                                                   method_name,
++                                                   parameters,
++                                                   reply_type,
++                                                   G_DBUS_CALL_FLAGS_NONE,
++                                                   5 * 1000,
++                                                   NULL,
++                                                   &error);
++
++    if (error) {
++        g_warning("Call \"%s\" is failed, %s", method_name, error->message);
++        g_error_free(error);
++
++        return FALSE;
++    }
++
++    *reply_data =  result;
++
++    return TRUE;
++}
++
++static gboolean d_dbus_filedialog_call_by_ghost_widget_sync(GtkWidget       *widget_ghost,
++                                                            const gchar     *method_name,
++                                                            GVariant        *parameters,
++                                                            const gchar     *reply_type,
++                                                            gpointer        reply_data)
++{
++    gchar *dbus_object_path = g_object_get_data(GTK_OBJECT(widget_ghost), D_STRINGIFY(_d_dbus_file_dialog_object_path));
++
++    if (!dbus_object_path)
++        return FALSE;
++
++    GVariant *result = NULL;
++    gboolean ok = d_dbus_filedialog_call_sync(dbus_object_path,
++                                              DFM_FILEDIALOG_DBUS_INTERFACE,
++                                              method_name,
++                                              parameters,
++                                              (const GVariantType *)reply_type,
++                                              &result);
++
++    d_debug("method name: %s, call finished: %d\n", method_name, ok);
++
++    if (reply_data)
++        g_variant_get(result, reply_type, reply_data);
++
++    if (result) {
++        gchar *tmp_variant_print = g_variant_print(result, TRUE);
++        gchar *tmp_variant_type_string = g_variant_get_type_string(result);
++
++        d_debug("%s, type=%s\n", tmp_variant_print, tmp_variant_type_string);
++        g_free(tmp_variant_print);
++        g_variant_unref(result);
++    }
++
++    return ok;
++}
++
++static gboolean d_dbus_filedialogmanager_call_by_ghost_widget_sync(const gchar     *method_name,
++                                                                   GVariant        *parameters,
++                                                                   const gchar     *reply_type,
++                                                                   gpointer        reply_data)
++{
++    GVariant *result = NULL;
++    gboolean ok = d_dbus_filedialog_call_sync(g_dbus_path,
++                                              DFM_FILEDIALOGMANAGER_DBUS_INTERFACE,
++                                              method_name,
++                                              parameters,
++                                              (const GVariantType *)reply_type,
++                                              &result);
++
++    if (reply_data)
++        g_variant_get(result, reply_type, reply_data);
++
++    if (result) {
++        gchar *tmp_variant_print = g_variant_print(result, TRUE);
++        gchar *tmp_variant_type_string = g_variant_get_type_string(result);
++
++        d_debug("%s, type=%s\n", tmp_variant_print, tmp_variant_type_string);
++        g_free(tmp_variant_print);
++        g_variant_unref(result);
++    }
++
++    return ok;
++}
++
++static gboolean d_dbus_filedialog_get_property_by_ghost_widget_sync(GtkWidget   *widget_ghost,
++                                                                    const gchar *property_name,
++                                                                    const gchar *reply_type,
++                                                                    gpointer    reply_data)
++{
++    GDBusConnection *dbus_connection = get_connection();
++
++    if (!dbus_connection) {
++        g_warning("Get dbus connection failed\n");
++
++        return FALSE;
++    }
++
++    gchar *dbus_object_path = g_object_get_data(GTK_OBJECT(widget_ghost), D_STRINGIFY(_d_dbus_file_dialog_object_path));
++
++    if (!dbus_object_path) {
++        return FALSE;
++    }
++
++    GError *error = NULL;
++    GVariant *result = g_dbus_connection_call_sync(dbus_connection,
++                                                   g_dbus_service,
++                                                   dbus_object_path,
++                                                   "org.freedesktop.DBus.Properties",
++                                                   "Get",
++                                                   g_variant_new("(ss)", DFM_FILEDIALOG_DBUS_INTERFACE, property_name),
++                                                   "(v)",
++                                                   G_DBUS_CALL_FLAGS_NONE,
++                                                   5 * 1000,
++                                                   NULL,
++                                                   &error);
++
++    if (error) {
++        g_warning("Get property \"%s\" is failed, %s", property_name, error->message);
++        g_error_free(error);
++
++        return FALSE;
++    }
++
++    GVariant *old_result = result;
++
++    g_variant_get(old_result, "(v)", &result);
++    g_variant_unref(old_result);
++
++    if (reply_data)
++        g_variant_get(result, reply_type, reply_data);
++
++    if (result) {
++        gchar *tmp_variant_print = g_variant_print(result, TRUE);
++        gchar *tmp_variant_type_string = g_variant_get_type_string(result);
++
++        d_debug("%s, type=%s\n", tmp_variant_print, tmp_variant_type_string);
++        g_free(tmp_variant_print);
++        g_variant_unref(result);
++    }
++
++    return TRUE;
++}
++
++static gboolean d_dbus_filedialog_set_property_by_ghost_widget_sync(GtkWidget   *widget_ghost,
++                                                                    const gchar *property_name,
++                                                                    GVariant    *value)
++{
++    d_debug("property name: %s\n", property_name);
++
++    GDBusConnection *dbus_connection = get_connection();
++
++    if (!dbus_connection) {
++        g_warning("Get dbus connection failed\n");
++
++        return FALSE;
++    }
++
++    gchar *dbus_object_path = g_object_get_data(GTK_OBJECT(widget_ghost), D_STRINGIFY(_d_dbus_file_dialog_object_path));
++
++    if (!dbus_object_path) {
++        return FALSE;
++    }
++
++    GError *error = NULL;
++    g_dbus_connection_call_sync(dbus_connection,
++                                g_dbus_service,
++                                dbus_object_path,
++                                "org.freedesktop.DBus.Properties",
++                                "Set",
++                                g_variant_new("(ssv)", DFM_FILEDIALOG_DBUS_INTERFACE, property_name, value),
++                                NULL,
++                                G_DBUS_CALL_FLAGS_NONE,
++                                5 * 1000,
++                                NULL,
++                                &error);
++
++    if (error) {
++        g_warning("Set property \"%s\" is failed, %s", property_name, error->message);
++        g_error_free(error);
++
++        return FALSE;
++    }
++
++    return TRUE;
++}
++
++static guint d_dbus_filedialog_connection_signal(const gchar            *object_path,
++                                                 const gchar            *signal_name,
++                                                 GDBusSignalCallback    callback,
++                                                 gpointer               user_data)
++{
++    GDBusConnection *dbus_connection = get_connection();
++
++    if (!dbus_connection) {
++        g_warning("Get dbus connection failed\n");
++
++        return -1;
++    }
++
++    return g_dbus_connection_signal_subscribe(dbus_connection,
++                                              g_dbus_service,
++                                              DFM_FILEDIALOG_DBUS_INTERFACE,
++                                              signal_name,
++                                              object_path,
++                                              NULL,
++                                              G_DBUS_SIGNAL_FLAGS_NONE,
++                                              callback,
++                                              user_data,
++                                              NULL);
++}
++
++gboolean _gtk_file_chooser_get_do_overwrite_confirmation(GtkFileChooser *chooser)
++{
++    g_return_val_if_fail (GTK_IS_FILE_CHOOSER (chooser), FALSE);
++
++    gboolean do_overwrite_confirmation = FALSE;
++    g_object_get (chooser, "do-overwrite-confirmation", &do_overwrite_confirmation, NULL);
++
++    return do_overwrite_confirmation;
++}
++
++static void _gtk_file_chooser_set_do_overwrite_confirmation(GtkFileChooser *chooser, gboolean do_overwrite_confirmation)
++{
++    g_return_if_fail (GTK_IS_FILE_CHOOSER (chooser));
++
++    g_object_set (chooser, "do-overwrite-confirmation", do_overwrite_confirmation, NULL);
++
++    d_debug("value: %d\n", do_overwrite_confirmation);
++}
++
++static void d_show_dbus_filedialog(GtkWidget *widget_ghost)
++{
++    const gchar *title = gtk_window_get_title(GTK_WINDOW(widget_ghost));
++    GtkFileChooserAction action = gtk_file_chooser_get_action(GTK_FILE_CHOOSER(widget_ghost));
++
++    gtk_file_chooser_set_action(GTK_FILE_CHOOSER(widget_ghost), action);
++
++    // 由于在某些程序中(qt4 gtk style)会直接使用g_object_set设置do-overwrite-confirmation这个属性
++    // 所以需要在此处再次获取值传递给dbus dialog
++    gboolean do_overwrite_confirmation = _gtk_file_chooser_get_do_overwrite_confirmation(GTK_FILE_CHOOSER_DIALOG(widget_ghost));
++    d_dbus_filedialog_call_by_ghost_widget_sync(widget_ghost,
++                                                "setOption",
++                                                g_variant_new("(ib)", (gint32)DontConfirmOverwrite, !do_overwrite_confirmation),
++                                                NULL, NULL);
++
++    if (title) {
++        d_dbus_filedialog_call_by_ghost_widget_sync(widget_ghost,
++                                                    "setWindowTitle",
++                                                    g_variant_new("(s)", title),
++                                                    NULL, NULL);
++    }
++
++    if (!d_dbus_filedialog_call_by_ghost_widget_sync(widget_ghost, "show", NULL, NULL, NULL))
++        return;
++
++    guint64 dbus_dialog_winId;
++
++    if (!d_dbus_filedialog_call_by_ghost_widget_sync(widget_ghost, "winId", NULL, "(t)", &dbus_dialog_winId))
++        return;
++
++    XSetTransientForHint(gdk_x11_get_default_xdisplay(), dbus_dialog_winId, GDK_WINDOW_XID(gtk_widget_get_window(widget_ghost)));
++}
++
++static void d_hide_dbus_filedialog(GtkWidget *widget_ghost)
++{
++    // 重设do-overwrite-confirmation属性的值
++    gboolean do_overwrite_confirmation = g_object_get_data(GTK_OBJECT(widget_ghost), D_STRINGIFY(_d_dbus_file_dialog_do_overwrite_confirmation));
++    if (do_overwrite_confirmation) {
++        _gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER_DIALOG(widget_ghost), TRUE);
++        // 这个属性存储的不是正常指针，所以这里必须将属性值置空
++        g_object_set_data(GTK_OBJECT(widget_ghost), D_STRINGIFY(_d_dbus_file_dialog_do_overwrite_confirmation), NULL);
++    }
++
++    d_dbus_filedialog_call_by_ghost_widget_sync(widget_ghost, "hide", NULL, NULL, NULL);
++}
++
++static void d_on_dbus_filedialog_finished(GDBusConnection  *connection,
++                                           const gchar      *sender_name,
++                                           const gchar      *object_path,
++                                           const gchar      *interface_name,
++                                           const gchar      *signal_name,
++                                           GVariant         *parameters,
++                                           GtkWidget        *widget_ghost)
++{
++    (void)connection;
++    (void)sender_name;
++    (void)object_path;
++    (void)interface_name;
++    (void)signal_name;
++
++    gint32 dialog_code;
++    g_variant_get(parameters, "(i)", &dialog_code);
++
++    if (dialog_code == Accepted && gtk_file_chooser_get_action(widget_ghost) == GTK_FILE_CHOOSER_ACTION_SAVE) {
++        GFile *file = gtk_file_chooser_get_file(widget_ghost);
++
++        if (file) {
++            char *file_basename = g_file_get_basename(file);
++            g_object_unref(file);
++            gtk_file_chooser_set_current_name(widget_ghost, file_basename);
++            free(file_basename);
++        }
++
++        // 在show之前设置是否显示覆盖询问对话框，因为在某些程序中可能是使用g_object_set直接设置的属性
++        // 导致覆盖gtk_file_chooser_set_do_overwrite_confirmation这个函数没有生效
++        // 所以在保存文件之前将do-overwrite-confirmation属性设置为false, 在窗口隐藏时恢复此值
++        gboolean do_overwrite_confirmation = _gtk_file_chooser_get_do_overwrite_confirmation(GTK_FILE_CHOOSER_DIALOG(widget_ghost));
++
++        // 将真实的do-overwrite-confirmation属性值保存到对话框对象的属性中
++        g_object_set_data(GTK_OBJECT(widget_ghost), D_STRINGIFY(_d_dbus_file_dialog_do_overwrite_confirmation), do_overwrite_confirmation);
++
++        if (do_overwrite_confirmation) {
++            // 禁用gtk对话框的文件覆盖确认对话框
++            _gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER_DIALOG(widget_ghost), FALSE);
++        }
++    }
++
++    gint accept_response_id ,reject_response_id;
++
++    d_get_gtk_dialog_response_id(GTK_DIALOG(widget_ghost), &accept_response_id, &reject_response_id);
++    gtk_dialog_response(GTK_DIALOG(widget_ghost), dialog_code == Rejected ? reject_response_id : accept_response_id);
++
++    d_debug("accept response id: %d, reject response id: %d\n", accept_response_id, reject_response_id);
++}
++
++static void d_on_dbus_filedialog_selectionFilesChanged(GDBusConnection  *connection,
++                                                        const gchar      *sender_name,
++                                                        const gchar      *object_path,
++                                                        const gchar      *interface_name,
++                                                        const gchar      *signal_name,
++                                                        GVariant         *parameters,
++                                                        GtkWidget        *widget_ghost)
++{
++    (void)connection;
++    (void)sender_name;
++    (void)object_path;
++    (void)interface_name;
++    (void)signal_name;
++    (void)parameters;
++
++    GVariantIter *selected_files = NULL;
++    gboolean ok = d_dbus_filedialog_call_by_ghost_widget_sync(widget_ghost,
++                                                              "selectedUrls",
++                                                              NULL,
++                                                              "(as)",
++                                                              &selected_files);
++
++    if (!ok || !selected_files)
++        return;
++
++    int selected_files_length = g_variant_iter_n_children(selected_files);
++
++    for (int i = 0; i < selected_files_length; ++i) {
++        gchar *file_uri = g_variant_get_string(g_variant_iter_next_value(selected_files), NULL);
++
++        gtk_file_chooser_select_uri(GTK_FILE_CHOOSER_DIALOG(widget_ghost), file_uri);
++        d_debug("selected file uri=%s\n", file_uri);
++    }
++
++    g_variant_iter_free(selected_files);
++}
++
++static void d_on_dbus_filedialog_currentUrlChanged(GDBusConnection  *connection,
++                                                   const gchar      *sender_name,
++                                                   const gchar      *object_path,
++                                                   const gchar      *interface_name,
++                                                   const gchar      *signal_name,
++                                                   GVariant         *parameters,
++                                                   GtkWidget        *widget_ghost)
++{
++    (void)connection;
++    (void)sender_name;
++    (void)object_path;
++    (void)interface_name;
++    (void)signal_name;
++    (void)parameters;
++
++    gchar *current_url = NULL;
++    gboolean ok = d_dbus_filedialog_get_property_by_ghost_widget_sync(widget_ghost,
++                                                                      "directoryUrl",
++                                                                      "s",
++                                                                      &current_url);
++
++    if (!ok || !current_url)
++        return;
++
++    d_debug("dbus file dialog current uri: %s\n", current_url);
++
++    GFile *file = g_file_new_for_uri (current_url);
++    GTK_FILE_CHOOSER_GET_IFACE (GTK_FILE_CHOOSER(widget_ghost))->set_current_folder (GTK_FILE_CHOOSER(widget_ghost), file, NULL);
++    g_object_unref (file);
++    g_free(current_url);
++}
++
++static void d_on_gtk_filedialog_destroy(GtkWidget *object,
++                                        gpointer   user_data)
++{
++    (void)object;
++    (void)user_data;
++
++    d_dbus_filedialog_call_by_ghost_widget_sync(object, "deleteLater", NULL, NULL, NULL);
++
++    guint timeout_handler_id = g_object_get_data(object, D_STRINGIFY(_d_dbus_file_dialog_heartbeat_timer_handler_id));
++    g_source_remove(timeout_handler_id);
++
++    // 这个属性存储的不是正常指针，所以这里必须将属性值置空
++    g_object_set_data(object, D_STRINGIFY(_d_dbus_file_dialog_do_overwrite_confirmation), NULL);
++
++    d_debug("d_on_gtk_filedialog_destroy\n");
++}
++
++static void d_on_gtk_filedialog_select_multiple_changed(GtkFileChooser *chooser,
++                                                        GParamSpec *value)
++{
++    (void)value;
++
++    if (gtk_file_chooser_get_action(chooser) == GTK_FILE_CHOOSER_ACTION_OPEN) {
++        gboolean select_multiple = gtk_file_chooser_get_select_multiple(chooser);
++
++        d_dbus_filedialog_call_by_ghost_widget_sync(GTK_WIDGET(chooser),
++                                                    "setFileMode",
++                                                    g_variant_new("(i)", select_multiple ? ExistingFiles : ExistingFile),
++                                                    NULL, NULL);
++    }
++}
++
++static gboolean d_heartbeat_filedialog(GtkWidget *widget_ghost)
++{
++    gboolean ok = d_dbus_filedialog_call_by_ghost_widget_sync(widget_ghost,
++                                                              "makeHeartbeat",
++                                                              NULL, NULL, NULL);
++    if (!ok)
++        d_debug("The dbus file dialog has beed die\n");
++
++    if (!ok) {
++        gint rejept_response_id;
++        d_get_gtk_dialog_response_id(GTK_DIALOG(widget_ghost), NULL, &rejept_response_id);
++        gtk_dialog_response(GTK_DIALOG(widget_ghost), rejept_response_id);
++    }
++
++    return ok;
++}
++
++static int d_bbyte_array_find_char(const GByteArray *array, gchar ch, int start)
++{
++    for (; start < array->len; ++start) {
++        if ((gchar)array->data[start] == ch)
++            return start;
++    }
++
++    return -1;
++}
++
++static GByteArray *d_gtk_file_filter_to_string(const GtkFileFilter *filter)
++{
++    if (filter->needed & (GTK_FILE_FILTER_FILENAME | GTK_FILE_FILTER_DISPLAY_NAME | GTK_FILE_FILTER_MIME_TYPE) == 0) {
++        return NULL;
++    }
++
++    GByteArray *byte_array = g_byte_array_new();
++
++    if (filter->name) {
++        g_byte_array_append(byte_array, filter->name, strlen(filter->name));
++        d_debug("name: %s\n", filter->name);
++    }
++
++    if (!filter->rules)
++        return byte_array;
++
++    int rule_list_length = g_slist_length(filter->rules);
++
++    d_debug("rule list length: %d\n", rule_list_length);
++
++    if (rule_list_length <= 0)
++        return byte_array;
++
++    int left_parenthesis_index = d_bbyte_array_find_char(byte_array, '(', 0);
++
++    if (left_parenthesis_index > 0 && (char)byte_array->data[byte_array->len - 1] == ')') {
++        g_byte_array_remove_range(byte_array, left_parenthesis_index, byte_array->len - left_parenthesis_index + 1);
++    }
++
++    g_byte_array_append(byte_array, " (", 2);
++
++    for (int i = 0; i < rule_list_length; ++i) {
++        FilterRule *rule = g_slist_nth_data(filter->rules, i);
++
++        if (rule->type == FILTER_RULE_PATTERN) {
++            d_debug("%d: pattern: %s\n", i, rule->u.pattern);
++
++            if (rule->u.pattern && strlen(rule->u.pattern) > 0) {
++                int length = strlen(rule->u.pattern);
++                gchar *new_pattern = (gchar*)malloc(sizeof(gchar) * length);
++
++                for (int i = 0; i < length; ++i) {
++                    if (rule->u.pattern[i] == '(' || rule->u.pattern[i] == ')')
++                        new_pattern[i] = ' ';
++                    else
++                        new_pattern[i] = rule->u.pattern[i];
++                }
++
++                g_byte_array_append(byte_array, new_pattern, length);
++                g_byte_array_append(byte_array, " ", 1);
++
++                free(new_pattern);
++            }
++        } else if (rule->type == FILTER_RULE_MIME_TYPE) {
++            GVariantIter *patterns = NULL;
++            gboolean ok = d_dbus_filedialogmanager_call_by_ghost_widget_sync("globPatternsForMime",
++                                                                             g_variant_new("(s)", rule->u.mime_type),
++                                                                             "(as)",
++                                                                             &patterns);
++            d_debug("%d: ok: %d, patterns: %lx\n", i, ok, patterns);
++
++            if (!ok || !patterns) {
++                g_byte_array_append(byte_array, rule->u.mime_type, strlen(rule->u.mime_type));
++                g_byte_array_append(byte_array, " ", 1);
++                continue;
++            }
++
++            int mimes_length = g_variant_iter_n_children(patterns);
++
++            d_debug("mimes length: %d\n", mimes_length);
++
++            for (int j = 0; j < mimes_length; ++j) {
++                gchar *pattern = g_variant_get_string(g_variant_iter_next_value(patterns), NULL);
++
++                d_debug("%d: pattern: %s\n", j, pattern);
++
++                g_byte_array_append(byte_array, pattern, strlen(pattern));
++                g_byte_array_append(byte_array, " ", 1);
++                g_free(pattern);
++            }
++
++            g_variant_iter_free(patterns);
++        } else {
++            d_debug("%d: other rule type: %d\n", i, rule->type);
++        }
++    }
++
++    if (byte_array->data[byte_array->len - 1] == '(') {
++        g_byte_array_free(byte_array, FALSE);
++
++        return NULL;
++    }
++
++    g_byte_array_remove_range(byte_array, byte_array->len - 1, 1);
++    g_byte_array_append(byte_array, ")", 1);
++
++    return byte_array;
++}
++
++static void d_update_filedialog_name_filters(GtkWidget *widget_ghost)
++{
++    gchar *dbus_object_path = g_object_get_data(GTK_OBJECT(widget_ghost), D_STRINGIFY(_d_dbus_file_dialog_object_path));
++
++    if (!dbus_object_path) {
++        return;
++    }
++
++    GSList *filter_list = gtk_file_chooser_list_filters(widget_ghost);
++    int filter_list_length = g_slist_length(filter_list);
++
++    gchar **list = g_malloc(filter_list_length * sizeof(gchar*));
++    int list_length = 0;
++
++    for (int i = 0; i < filter_list_length; ++i) {
++        GtkFileFilter *filter = g_slist_nth_data(filter_list, i);
++        GByteArray *string = d_gtk_file_filter_to_string(filter);
++
++        if (!string)
++            continue;
++
++        g_byte_array_append(string, "\0", 1);
++        gchar *str = g_malloc(string->len);
++        strcpy(str, string->data);
++        list[list_length++] = str;
++        d_debug("%d: filter string: %s\n", i, string->data);
++        g_byte_array_free(string, FALSE);
++    }
++
++    d_debug("%d\n", list_length);
++
++    if (list_length > 0) {
++        d_dbus_filedialog_set_property_by_ghost_widget_sync(widget_ghost,
++                                                            "nameFilters",
++                                                            g_variant_new_strv(list, list_length));
++        gtk_file_chooser_set_filter(widget_ghost, gtk_file_chooser_get_filter(widget_ghost));
++
++        for (int i = 0; i < list_length; ++i)
++            g_free(list[i]);
++    }
++
++    g_free(list);
++    g_slist_free(filter_list);
++}
++
++static void d_on_filedialog_selected_filter_changed(GDBusConnection  *connection,
++                                                    const gchar      *sender_name,
++                                                    const gchar      *object_path,
++                                                    const gchar      *interface_name,
++                                                    const gchar      *signal_name,
++                                                    GVariant         *parameters,
++                                                    GtkWidget        *widget_ghost)
++{
++    (void)connection;
++    (void)sender_name;
++    (void)object_path;
++    (void)interface_name;
++    (void)signal_name;
++    (void)parameters;
++
++    gchar *selected_filter = NULL;
++
++    gboolean ok = d_dbus_filedialog_call_by_ghost_widget_sync(widget_ghost,
++                                                              "selectedNameFilter",
++                                                              NULL,
++                                                              "(s)",
++                                                              &selected_filter);
++
++    if (!ok || !selected_filter) {
++        d_debug("Get dbus file dialog selected filter failed!\n");
++        return;
++    }
++
++    GList *list = gtk_file_chooser_list_filters(GTK_FILE_CHOOSER(widget_ghost));
++    int length = g_list_length(list);
++
++    for (int i = 0; i < length; ++i) {
++        GtkFileFilter *filter = GTK_FILE_FILTER(g_list_nth_data(list, i));
++
++        if (!filter)
++            continue;
++
++        GByteArray *array = d_gtk_file_filter_to_string(filter);
++
++        if (!array)
++            continue;
++
++        g_byte_array_append(array, "\0", 1);
++
++        d_debug("%d: %s, %s\n", i, selected_filter, array->data);
++
++        if (strcmp(selected_filter, array->data) == 0) {
++            g_object_set (GTK_FILE_CHOOSER(widget_ghost), "filter", filter, NULL);
++            g_byte_array_unref(array);
++            break;
++        }
++
++        g_byte_array_unref(array);
++    }
++
++    g_free(selected_filter);
++}
++
++void d_get_gtk_dialog_response_id(GtkDialog *dialog, gint *accept_id, gint *reject_id)
++{
++    if (accept_id) {
++        if (gtk_dialog_get_widget_for_response(dialog, GTK_RESPONSE_OK)) {
++            *accept_id = GTK_RESPONSE_OK;
++        } else if (gtk_dialog_get_widget_for_response(dialog, GTK_RESPONSE_YES)) {
++            *accept_id = GTK_RESPONSE_YES;
++        } else if (gtk_dialog_get_widget_for_response(dialog, GTK_RESPONSE_APPLY)) {
++            *accept_id = GTK_RESPONSE_APPLY;
++        } else {
++            *accept_id = GTK_RESPONSE_ACCEPT;
++        }
++    }
++
++    if (reject_id) {
++        if (gtk_dialog_get_widget_for_response(dialog, GTK_RESPONSE_REJECT)) {
++            *reject_id = GTK_RESPONSE_REJECT;
++        } if (gtk_dialog_get_widget_for_response(dialog, GTK_RESPONSE_NO)) {
++            *reject_id = GTK_RESPONSE_NO;
++        } else {
++            *reject_id = GTK_RESPONSE_CANCEL;
++        }
++    }
++}
++
++static gboolean hook_gtk_file_chooser_dialog(GtkWidget            *dialog,
++                                             GtkWindow            *parent)
++{
++    if (getenv("_d_disable_filedialog")) {
++        return FALSE;
++    }
++
++    // 判断窗管协议类型，决定调用哪套dbus接口
++    GdkDisplay *display = gtk_widget_get_display(dialog);
++#ifdef GDK_WINDOWING_WAYLAND
++    if (GDK_IS_WAYLAND_WINDOW(display)) {
++        d_debug("dde-filedialog: gdk is wayland display!\n");
++        if (wayland_dbus_is_exist()) {
++            g_dbus_service = DFM_FILEDIALOG_DBUS_SERVER_WAYLAND;
++            g_dbus_path = DFM_FILEDIALOGMANAGER_DBUS_PATH_WAYLAND;
++        }
++    } else
++#endif
++#ifdef GDK_WINDOWING_X11
++    if (GDK_IS_X11_DISPLAY(display)) {
++        d_debug("dde-filedialog: gdk is x11 display!\n");
++        if (x11_dbus_is_exist()) {
++            g_dbus_service = DFM_FILEDIALOG_DBUS_SERVER_X11;
++            g_dbus_path = DFM_FILEDIALOGMANAGER_DBUS_PATH_X11;
++        }
++    } else
++#endif
++    {
++        d_debug("dde-filedialog: Unsupported GDK backend!\n");
++    }
++
++    gboolean enable_dbus_dialog = FALSE;
++    gboolean ok = d_dbus_filedialogmanager_call_by_ghost_widget_sync("isUseFileChooserDialog",
++                                                                     NULL, "(b)", &enable_dbus_dialog);
++
++    if (ok && !enable_dbus_dialog)
++        return FALSE;
++
++    GFile *file_this = g_file_new_for_path(g_get_application_name());
++
++    if (!file_this)
++        return FALSE;
++
++    char *file_basename = g_file_get_basename(file_this);
++    g_object_unref(file_this);
++
++    ok = d_dbus_filedialogmanager_call_by_ghost_widget_sync("canUseFileChooserDialog",
++                                                            g_variant_new("(ss)", "gtk3", file_basename),
++                                                            "(b)", &enable_dbus_dialog);
++    free(file_basename);
++
++    if (ok && !enable_dbus_dialog)
++        return FALSE;
++
++    gchar *dbus_object_path = NULL;
++    ok = d_dbus_filedialogmanager_call_by_ghost_widget_sync("createDialog",
++                                                            g_variant_new("(s)", ""),
++                                                            "(o)",
++                                                            &dbus_object_path);
++
++    if (!ok)
++        return FALSE;
++
++    gtk_window_set_decorated(GTK_WINDOW(dialog), FALSE);
++    gtk_window_set_skip_pager_hint(GTK_WINDOW(dialog), TRUE);
++
++    d_debug("_d_show_gtk_file_chooser_dialog: %s\n", getenv("_d_show_gtk_file_chooser_dialog"));
++
++    if (!getenv("_d_show_gtk_file_chooser_dialog")) {
++        gtk_window_set_opacity(GTK_WINDOW(dialog), 0);
++        
++        cairo_rectangle_int_t rectangle;
++        rectangle.x = rectangle.y = rectangle.width = rectangle.height = 1;
++        gtk_widget_shape_combine_region(dialog, cairo_region_create_rectangle(&rectangle));
++
++        GdkGeometry geometry;
++
++        geometry.max_width = 1;
++        geometry.max_height = 1;
++
++        gtk_window_set_geometry_hints(GTK_WINDOW(dialog), NULL, &geometry, GDK_HINT_MAX_SIZE);
++        gtk_window_resize(GTK_WINDOW(dialog), geometry.max_width, geometry.max_height);
++
++        gtk_window_set_accept_focus(GTK_WINDOW(dialog), FALSE);
++        if (parent) {
++            // 必须放到此处设置, 否则会导致对话框关闭后焦点不会自动回到主窗口
++            gtk_window_set_transient_for(GTK_WINDOW (dialog), parent);
++            // 谨慎使用, 放到之前设置时, 会导致保存文件对话框点击确认按钮时无效
++            gtk_widget_set_sensitive(dialog, FALSE);
++        }
++
++        d_debug("dde-filedialog: gtk version is gtk+3.0; dde-file-dialog service name: %s\n", g_dbus_service);
++    }
++
++    g_object_set_data(GTK_OBJECT(dialog), D_STRINGIFY(_d_dbus_file_dialog_object_path), dbus_object_path);
++
++    // Init the dbus file chooser dialog
++    d_dbus_filedialog_set_property_by_ghost_widget_sync(GTK_WIDGET(dialog),
++                                                        "hideOnAccept",
++                                                        g_variant_new_boolean(FALSE));
++    d_dbus_filedialog_call_by_ghost_widget_sync(GTK_WIDGET(dialog),
++                                                "addDisableUrlScheme",
++                                                g_variant_new("(s)", "tag"),
++                                                NULL, NULL);
++
++    // Sync current uri
++    gchar *current_folder_uri = gtk_file_chooser_get_current_folder_uri(dialog);
++
++    if (current_folder_uri) {
++        d_debug("gtk dialog current uri: %s\n", current_folder_uri);
++
++        d_dbus_filedialog_set_property_by_ghost_widget_sync(GTK_WIDGET(dialog),
++                                                            "directoryUrl",
++                                                            g_variant_new_string(current_folder_uri));
++        g_free(current_folder_uri);
++    } else {
++        d_on_dbus_filedialog_currentUrlChanged(NULL, NULL, NULL, NULL, NULL, NULL, dialog);
++    }
++
++    // GTK widget mapping to DBus file dialog
++    g_signal_connect(dialog, "show", G_CALLBACK(d_show_dbus_filedialog), dialog);
++    g_signal_connect(dialog, "hide", G_CALLBACK(d_hide_dbus_filedialog), dialog);
++    // 在有些应用中会通过g_object_set直接设置属性，此处使用这个属性的信号代替对gtk_file_chooser_set_select_multiple函数的覆盖
++    g_signal_connect(dialog, "notify::select-multiple", G_CALLBACK(d_on_gtk_filedialog_select_multiple_changed), NULL);
++
++    d_dbus_filedialog_call_by_ghost_widget_sync(dialog,
++                                                "setOption",
++                                                g_variant_new("(ib)", (gint32)HideNameFilterDetails, True),
++                                                NULL, NULL);
++
++    // DBus file dialog mapping to GTK widget
++    d_dbus_filedialog_connection_signal(dbus_object_path,
++                                        "finished",
++                                        G_CALLBACK(d_on_dbus_filedialog_finished),
++                                        dialog);
++    d_dbus_filedialog_connection_signal(dbus_object_path,
++                                        "selectionFilesChanged",
++                                        G_CALLBACK(d_on_dbus_filedialog_selectionFilesChanged),
++                                        dialog);
++
++    d_dbus_filedialog_connection_signal(dbus_object_path,
++                                        "currentUrlChanged",
++                                        G_CALLBACK(d_on_dbus_filedialog_currentUrlChanged),
++                                        dialog);
++    d_dbus_filedialog_connection_signal(dbus_object_path,
++                                        "selectedNameFilterChanged",
++                                        G_CALLBACK(d_on_filedialog_selected_filter_changed),
++                                        dialog);
++
++    // heartbeat for dbus dialog
++    int interval = -1;
++
++    if (d_dbus_filedialog_get_property_by_ghost_widget_sync(dialog,
++                                                            "heartbeatInterval",
++                                                            "i",
++                                                            &interval)) {
++        guint timeout_handler_id = g_timeout_add(MAX(1 * 1000, MIN((int)(interval / 1.5), interval - 5 * 1000)), d_heartbeat_filedialog, dialog);
++        g_object_set_data(GTK_OBJECT(dialog), D_STRINGIFY(_d_dbus_file_dialog_heartbeat_timer_handler_id), timeout_handler_id);
++        g_signal_connect(dialog, "destroy", G_CALLBACK(d_on_gtk_filedialog_destroy), NULL);
++    }
++
++    return TRUE;
++}
++
++D_EXPORT void _d_ddefiledialog_override_gtk_dialog(GtkWidget *dialog)
++{
++    GtkWindow *parent = gtk_window_get_transient_for(GTK_WINDOW(dialog));
++
++    hook_gtk_file_chooser_dialog(dialog, parent);
++}
++
++D_EXPORT
++void gtk_file_chooser_set_action(GtkFileChooser *chooser, GtkFileChooserAction action)
++{
++    g_return_if_fail (GTK_IS_FILE_CHOOSER (chooser));
++
++    g_object_set (chooser, "action", action, NULL);
++
++    switch (action) {
++    case GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER:
++        d_dbus_filedialog_call_by_ghost_widget_sync(GTK_WIDGET(chooser),
++                                                    "setFileMode",
++                                                    g_variant_new("(i)", Directory),
++                                                    NULL, NULL);
++        // no break
++    case GTK_FILE_CHOOSER_ACTION_OPEN:
++        d_dbus_filedialog_set_property_by_ghost_widget_sync(GTK_WIDGET(chooser),
++                                                            "acceptMode",
++                                                            g_variant_new_int32(AcceptOpen));
++
++        gboolean select_multiple = gtk_file_chooser_get_select_multiple(chooser);
++
++        if (action == GTK_FILE_CHOOSER_ACTION_OPEN) {
++            d_debug("select multiple: %d\n", select_multiple);
++
++            d_dbus_filedialog_call_by_ghost_widget_sync(GTK_WIDGET(chooser),
++                                                        "setFileMode",
++                                                        g_variant_new("(i)", select_multiple ? ExistingFiles : ExistingFile),
++                                                        NULL, NULL);
++        }
++
++        break;
++    case GTK_FILE_CHOOSER_ACTION_SAVE:
++        d_dbus_filedialog_set_property_by_ghost_widget_sync(GTK_WIDGET(chooser),
++                                                            "acceptMode",
++                                                            g_variant_new_int32(AcceptSave));
++
++        break;
++    default:
++        break;
++    }
++}
++
++//GtkFileChooserAction gtk_file_chooser_get_action(GtkFileChooser *chooser)
++//{
++
++//}
++
++//void gtk_file_chooser_set_local_only(GtkFileChooser *chooser, gboolean local_only)
++//{
++
++//}
++
++//gboolean gtk_file_chooser_get_local_only(GtkFileChooser *chooser)
++//{
++
++//}
++
++// D_EXPORT
++// void gtk_file_chooser_set_select_multiple(GtkFileChooser *chooser, gboolean select_multiple)
++// {
++//     g_return_if_fail (GTK_IS_FILE_CHOOSER (chooser));
++
++//    g_object_set (chooser, "select-multiple", select_multiple, NULL);
++
++//    if (gtk_file_chooser_get_action(chooser) == GTK_FILE_CHOOSER_ACTION_OPEN) {
++//        d_dbus_filedialog_call_by_ghost_widget_sync(GTK_WIDGET(chooser),
++//                                                    "setFileMode",
++//                                                    g_variant_new("(i)", select_multiple ? ExistingFiles : ExistingFile),
++//                                                    NULL, NULL);
++//    }
++//}
++
++//gboolean gtk_file_chooser_get_select_multiple(GtkFileChooser *chooser)
++//{
++
++//}
++
++D_EXPORT
++void gtk_file_chooser_set_show_hidden(GtkFileChooser *chooser, gboolean show_hidden)
++{
++    g_return_if_fail (GTK_IS_FILE_CHOOSER (chooser));
++
++    g_object_set (chooser, "show-hidden", show_hidden, NULL);
++}
++
++//gboolean gtk_file_chooser_get_show_hidden(GtkFileChooser *chooser)
++//{
++
++//}
++
++D_EXPORT
++void gtk_file_chooser_set_do_overwrite_confirmation(GtkFileChooser *chooser, gboolean do_overwrite_confirmation)
++{
++    _gtk_file_chooser_set_do_overwrite_confirmation(chooser, FALSE);
++
++    d_dbus_filedialog_call_by_ghost_widget_sync(GTK_WIDGET(chooser),
++                                                "setOption",
++                                                g_variant_new("(ib)", (gint32)DontConfirmOverwrite, !do_overwrite_confirmation),
++                                                NULL, NULL);
++}
++
++D_EXPORT
++gboolean gtk_file_chooser_get_do_overwrite_confirmation(GtkFileChooser *chooser)
++{
++    gboolean do_overwrite_confirmation;
++
++    if (!d_dbus_filedialog_call_by_ghost_widget_sync(GTK_WIDGET(chooser), "testOption",
++                                                     g_variant_new("(i)", (gint32)DontConfirmOverwrite),
++                                                     "(b)", &do_overwrite_confirmation)) {
++        return !do_overwrite_confirmation;
++    }
++
++    return _gtk_file_chooser_get_do_overwrite_confirmation(chooser);
++}
++
++//void gtk_file_chooser_set_create_folders(GtkFileChooser *chooser, gboolean create_folders)
++//{
++
++//}
++
++//gboolean gtk_file_chooser_get_create_folders(GtkFileChooser *chooser)
++//{
++
++//}
++
++/* Suggested name for the Save-type actions
++ */
++
++D_EXPORT
++void gtk_file_chooser_set_current_name(GtkFileChooser *chooser, const gchar *name)
++{
++    g_return_if_fail (GTK_IS_FILE_CHOOSER (chooser));
++    g_return_if_fail (name != NULL);
++
++    GTK_FILE_CHOOSER_GET_IFACE (chooser)->set_current_name (chooser, name);
++
++    d_dbus_filedialog_call_by_ghost_widget_sync(chooser,
++                                                "setCurrentInputName",
++                                                g_variant_new("(s)", name),
++                                                NULL, NULL);
++}
++
++D_EXPORT
++gchar *gtk_file_chooser_get_filename(GtkFileChooser *chooser)
++{
++    GFile *file;
++    gchar *result = NULL;
++
++    g_return_val_if_fail (GTK_IS_FILE_CHOOSER (chooser), NULL);
++
++    file = gtk_file_chooser_get_file (chooser);
++
++    if (file)
++    {
++        result = g_file_get_path (file);
++        g_object_unref (file);
++    }
++
++    return result;
++}
++
++//gboolean gtk_file_chooser_select_filename(GtkFileChooser *chooser, const char *filename)
++//{
++
++//}
++
++//void gtk_file_chooser_unselect_filename(GtkFileChooser *chooser, const char *filename)
++//{
++
++//}
++
++//void gtk_file_chooser_select_all(GtkFileChooser *chooser)
++//{
++
++//}
++
++//void gtk_file_chooser_unselect_all (GtkFileChooser *chooser)
++//{
++
++//}
++
++D_EXPORT
++GSList *gtk_file_chooser_get_filenames(GtkFileChooser *chooser)
++{
++    GSList *files, *result;
++
++    g_return_val_if_fail (GTK_IS_FILE_CHOOSER (chooser), NULL);
++
++    files = gtk_file_chooser_get_files (chooser);
++
++    result = files_to_strings (files, g_file_get_path);
++    g_slist_foreach (files, (GFunc) g_object_unref, NULL);
++    g_slist_free (files);
++
++    return result;
++}
++
++D_EXPORT
++gboolean gtk_file_chooser_set_current_folder(GtkFileChooser *chooser, const gchar *filename)
++{
++    GFile *file;
++    gboolean result;
++
++    g_return_val_if_fail (GTK_IS_FILE_CHOOSER (chooser), FALSE);
++    g_return_val_if_fail (filename != NULL, FALSE);
++
++    file = g_file_new_for_path (filename);
++    result = gtk_file_chooser_set_current_folder_file (chooser, file, NULL);
++    g_object_unref (file);
++
++    return result;
++}
++
++//gchar *gtk_file_chooser_get_current_folder(GtkFileChooser *chooser)
++//{
++
++//}
++
++/* URI manipulation
++ */
++D_EXPORT
++gchar *gtk_file_chooser_get_uri(GtkFileChooser *chooser)
++{
++    GFile *file;
++    gchar *result = NULL;
++
++    g_return_val_if_fail (GTK_IS_FILE_CHOOSER (chooser), NULL);
++
++    file = gtk_file_chooser_get_file (chooser);
++    if (file)
++    {
++        if (gtk_file_chooser_get_local_only (chooser))
++        {
++            gchar *local = g_file_get_path (file);
++            if (local)
++            {
++                result = g_filename_to_uri (local, NULL, NULL);
++                g_free (local);
++            }
++        }
++        else
++        {
++            result = g_file_get_uri (file);
++        }
++        g_object_unref (file);
++    }
++
++    return result;
++}
++
++//gboolean gtk_file_chooser_set_uri (GtkFileChooser *chooser, const char *uri)
++//{
++
++//}
++
++//gboolean gtk_file_chooser_select_uri (GtkFileChooser *chooser, const char *uri)
++//{
++
++//}
++
++//void gtk_file_chooser_unselect_uri (GtkFileChooser *chooser, const char *uri)
++//{
++
++//}
++
++D_EXPORT
++GSList * gtk_file_chooser_get_uris (GtkFileChooser *chooser)
++{
++    GSList *files, *result;
++
++    g_return_val_if_fail (GTK_IS_FILE_CHOOSER (chooser), NULL);
++
++    files = gtk_file_chooser_get_files (chooser);
++
++    if (gtk_file_chooser_get_local_only (chooser))
++        result = files_to_strings (files, file_to_uri_with_native_path);
++    else
++        result = files_to_strings (files, g_file_get_uri);
++
++    g_slist_foreach (files, (GFunc) g_object_unref, NULL);
++    g_slist_free (files);
++
++    return result;
++}
++
++D_EXPORT
++gboolean gtk_file_chooser_set_current_folder_uri (GtkFileChooser *chooser, const gchar *uri)
++{
++    GFile *file;
++    gboolean result;
++
++    g_return_val_if_fail (GTK_IS_FILE_CHOOSER (chooser), FALSE);
++    g_return_val_if_fail (uri != NULL, FALSE);
++
++    file = g_file_new_for_uri (uri);
++    result = gtk_file_chooser_set_current_folder_file (chooser, file, NULL);
++    g_object_unref (file);
++
++    return result;
++}
++
++//gchar *gtk_file_chooser_get_current_folder_uri (GtkFileChooser *chooser)
++//{
++
++//}
++
++/* GFile manipulation */
++D_EXPORT
++GFile *gtk_file_chooser_get_file (GtkFileChooser *chooser)
++{
++    GSList *list;
++    GFile *result = NULL;
++
++    g_return_val_if_fail (GTK_IS_FILE_CHOOSER (chooser), NULL);
++
++    list = gtk_file_chooser_get_files (chooser);
++    if (list)
++    {
++        result = list->data;
++        list = g_slist_delete_link (list, list);
++
++        g_slist_foreach (list, (GFunc) g_object_unref, NULL);
++        g_slist_free (list);
++    }
++
++    return result;
++}
++
++//gboolean gtk_file_chooser_set_file (GtkFileChooser *chooser, GFile *file, GError **error)
++//{
++
++//}
++
++//gboolean gtk_file_chooser_select_file (GtkFileChooser *chooser, GFile *file, GError **error)
++//{
++
++//}
++
++//void gtk_file_chooser_unselect_file (GtkFileChooser *chooser, GFile *file)
++//{
++
++//}
++
++D_EXPORT
++GSList *gtk_file_chooser_get_files (GtkFileChooser *chooser)
++{
++    GVariantIter *selected_files = NULL;
++    gboolean ok = d_dbus_filedialog_call_by_ghost_widget_sync(GTK_WIDGET(chooser),
++                                                              "selectedFiles",
++                                                              NULL,
++                                                              "(as)",
++                                                              &selected_files);
++
++    if (!ok) {
++        g_return_val_if_fail (GTK_IS_FILE_CHOOSER (chooser), NULL);
++
++        return GTK_FILE_CHOOSER_GET_IFACE (chooser)->get_files (chooser);
++    }
++
++    if (!selected_files)
++        return NULL;
++
++    GSList *file_list = NULL;
++    GSList *file_list_first = NULL;
++    int selected_files_length = g_variant_iter_n_children(selected_files);
++
++    for (int i = 0; i < selected_files_length; ++i) {
++        gchar *file_path = g_variant_get_string(g_variant_iter_next_value(selected_files), NULL);
++        GFile *file = g_file_new_for_path(file_path);
++        g_free(file_path);
++
++        file_list = g_slist_append(file_list, file);
++
++        if (!file_list_first) {
++            file_list_first = file_list;
++        }
++    }
++
++    g_variant_iter_free(selected_files);
++
++    return file_list_first;
++}
++
++D_EXPORT
++gboolean gtk_file_chooser_set_current_folder_file (GtkFileChooser *chooser, GFile *file, GError **error)
++{
++    g_return_val_if_fail (GTK_IS_FILE_CHOOSER (chooser), FALSE);
++    g_return_val_if_fail (G_IS_FILE (file), FALSE);
++    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
++
++    d_debug("uri: %s, path: %s\n", g_file_get_uri(file), g_file_get_path(file));
++
++    d_dbus_filedialog_set_property_by_ghost_widget_sync(GTK_WIDGET(chooser),
++                                                        "directoryUrl",
++                                                        g_variant_new_string(g_file_get_uri(file)));
++
++    return GTK_FILE_CHOOSER_GET_IFACE (chooser)->set_current_folder (chooser, file, error);
++}
++
++//GFile *gtk_file_chooser_get_current_folder_file (GtkFileChooser *chooser)
++//{
++//    g_return_val_if_fail (GTK_IS_FILE_CHOOSER (chooser), NULL);
++
++//    return GTK_FILE_CHOOSER_GET_IFACE (chooser)->get_current_folder (chooser);
++//}
++
++/* Preview widget
++ */
++//void gtk_file_chooser_set_preview_widget (GtkFileChooser *chooser, GtkWidget *preview_widget)
++//{
++
++//}
++
++//GtkWidget *gtk_file_chooser_get_preview_widget (GtkFileChooser *chooser)
++//{
++
++//}
++
++//void gtk_file_chooser_set_preview_widget_active (GtkFileChooser *chooser, gboolean active)
++//{
++
++//}
++
++//gboolean gtk_file_chooser_get_preview_widget_active (GtkFileChooser *chooser)
++//{
++
++//}
++
++//void gtk_file_chooser_set_use_preview_label (GtkFileChooser *chooser, gboolean use_label)
++//{
++
++//}
++
++//gboolean gtk_file_chooser_get_use_preview_label (GtkFileChooser *chooser)
++//{
++
++//}
++
++//char *gtk_file_chooser_get_preview_filename (GtkFileChooser *chooser)
++//{
++
++//}
++
++//char *gtk_file_chooser_get_preview_uri (GtkFileChooser *chooser)
++//{
++
++//}
++
++//GFile *gtk_file_chooser_get_preview_file (GtkFileChooser *chooser)
++//{
++
++//}
++
++/* Extra widget
++ */
++//void gtk_file_chooser_set_extra_widget (GtkFileChooser *chooser, GtkWidget *extra_widget)
++//{
++
++//}
++
++//GtkWidget *gtk_file_chooser_get_extra_widget (GtkFileChooser *chooser)
++//{
++
++//}
++
++/* List of user selectable filters
++ */
++
++D_EXPORT
++void gtk_file_chooser_add_filter (GtkFileChooser *chooser, GtkFileFilter *filter)
++{
++    g_return_if_fail (GTK_IS_FILE_CHOOSER (chooser));
++
++    GTK_FILE_CHOOSER_GET_IFACE (chooser)->add_filter (chooser, filter);
++
++    d_update_filedialog_name_filters(chooser);
++}
++
++D_EXPORT
++void gtk_file_chooser_remove_filter (GtkFileChooser *chooser, GtkFileFilter  *filter)
++{
++    g_return_if_fail (GTK_IS_FILE_CHOOSER (chooser));
++
++    GTK_FILE_CHOOSER_GET_IFACE (chooser)->remove_filter (chooser, filter);
++
++    d_update_filedialog_name_filters(chooser);
++}
++
++//GSList *gtk_file_chooser_list_filters (GtkFileChooser *chooser)
++//{
++
++//}
++
++/* Current filter
++ */
++D_EXPORT
++void gtk_file_chooser_set_filter (GtkFileChooser *chooser, GtkFileFilter *filter)
++{
++    g_return_if_fail (GTK_IS_FILE_CHOOSER (chooser));
++    g_return_if_fail (GTK_IS_FILE_FILTER (filter));
++
++    g_object_set (chooser, "filter", filter, NULL);
++
++    GByteArray *array = d_gtk_file_filter_to_string(filter);
++
++    if (!array)
++        return;
++
++    if (array->len > 0) {
++        g_byte_array_append(array, "\0", 1);
++        d_dbus_filedialog_call_by_ghost_widget_sync(chooser,
++                                                    "selectNameFilter",
++                                                    g_variant_new("(s)", array->data),
++                                                    NULL, NULL);
++    }
++
++    g_byte_array_free(array, FALSE);
++}
++
++//GtkFileFilter *gtk_file_chooser_get_filter (GtkFileChooser *chooser)
++//{
++
++//}
++
++/* Per-application shortcut folders */
++//gboolean gtk_file_chooser_add_shortcut_folder (GtkFileChooser *chooser, const char *folder, GError **error)
++//{
++
++//}
++
++//gboolean gtk_file_chooser_remove_shortcut_folder (GtkFileChooser *chooser, const char *folder, GError **error)
++//{
++
++//}
++
++//GSList *gtk_file_chooser_list_shortcut_folders (GtkFileChooser *chooser)
++//{
++
++//}
++
++//gboolean gtk_file_chooser_add_shortcut_folder_uri (GtkFileChooser *chooser, const char *uri, GError **error)
++//{
++
++//}
++
++//gboolean gtk_file_chooser_remove_shortcut_folder_uri (GtkFileChooser *chooser, const char *uri, GError **error)
++//{
++
++//}
++
++//GSList *gtk_file_chooser_list_shortcut_folder_uris (GtkFileChooser *chooser)
++//{
++
++//}
+diff --git a/gtk/gtkfilechooser.h b/gtk/gtkfilechooser.h
+index 92cdbb3..465c1b7 100644
+--- a/gtk/gtkfilechooser.h
++++ b/gtk/gtkfilechooser.h
+@@ -117,206 +117,269 @@ GQuark gtk_file_chooser_error_quark (void);
+ 
+ /* Configuration
+  */
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void                 gtk_file_chooser_set_action          (GtkFileChooser       *chooser,
+ 							   GtkFileChooserAction  action);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GtkFileChooserAction gtk_file_chooser_get_action          (GtkFileChooser       *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void                 gtk_file_chooser_set_local_only      (GtkFileChooser       *chooser,
+ 							   gboolean              local_only);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean             gtk_file_chooser_get_local_only      (GtkFileChooser       *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void                 gtk_file_chooser_set_select_multiple (GtkFileChooser       *chooser,
+ 							   gboolean              select_multiple);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean             gtk_file_chooser_get_select_multiple (GtkFileChooser       *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void                 gtk_file_chooser_set_show_hidden     (GtkFileChooser       *chooser,
+ 							   gboolean              show_hidden);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean             gtk_file_chooser_get_show_hidden     (GtkFileChooser       *chooser);
+ 
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void                 gtk_file_chooser_set_do_overwrite_confirmation (GtkFileChooser *chooser,
+ 								     gboolean        do_overwrite_confirmation);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean             gtk_file_chooser_get_do_overwrite_confirmation (GtkFileChooser *chooser);
+ 
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void                 gtk_file_chooser_set_create_folders  (GtkFileChooser       *chooser,
+ 							  gboolean               create_folders);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean             gtk_file_chooser_get_create_folders (GtkFileChooser *chooser);
+ 
+ /* Suggested name for the Save-type actions
+  */
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void        gtk_file_chooser_set_current_name  (GtkFileChooser *chooser,
+ 					        const gchar    *name);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_3_10
+ gchar *gtk_file_chooser_get_current_name (GtkFileChooser *chooser);
+ 
+ /* Filename manipulation
+  */
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gchar *  gtk_file_chooser_get_filename       (GtkFileChooser *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_set_filename       (GtkFileChooser *chooser,
+ 					      const char     *filename);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_select_filename    (GtkFileChooser *chooser,
+ 					      const char     *filename);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void     gtk_file_chooser_unselect_filename  (GtkFileChooser *chooser,
+ 					      const char     *filename);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void     gtk_file_chooser_select_all         (GtkFileChooser *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void     gtk_file_chooser_unselect_all       (GtkFileChooser *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GSList * gtk_file_chooser_get_filenames      (GtkFileChooser *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_set_current_folder (GtkFileChooser *chooser,
+ 					      const gchar    *filename);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gchar *  gtk_file_chooser_get_current_folder (GtkFileChooser *chooser);
+ 
+ 
+ /* URI manipulation
+  */
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gchar *  gtk_file_chooser_get_uri                (GtkFileChooser *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_set_uri                (GtkFileChooser *chooser,
+ 						  const char     *uri);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_select_uri             (GtkFileChooser *chooser,
+ 						  const char     *uri);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void     gtk_file_chooser_unselect_uri           (GtkFileChooser *chooser,
+ 						  const char     *uri);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GSList * gtk_file_chooser_get_uris               (GtkFileChooser *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_set_current_folder_uri (GtkFileChooser *chooser,
+ 						  const gchar    *uri);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gchar *  gtk_file_chooser_get_current_folder_uri (GtkFileChooser *chooser);
+ 
+ /* GFile manipulation */
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GFile *  gtk_file_chooser_get_file                (GtkFileChooser  *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_set_file                (GtkFileChooser  *chooser,
+                                                    GFile           *file,
+                                                    GError         **error);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_select_file             (GtkFileChooser  *chooser,
+                                                    GFile           *file,
+                                                    GError         **error);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void     gtk_file_chooser_unselect_file           (GtkFileChooser  *chooser,
+                                                    GFile           *file);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GSList * gtk_file_chooser_get_files               (GtkFileChooser  *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_set_current_folder_file (GtkFileChooser  *chooser,
+                                                    GFile           *file,
+                                                    GError         **error);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GFile *  gtk_file_chooser_get_current_folder_file (GtkFileChooser  *chooser);
+ 
+ /* Preview widget
+  */
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void       gtk_file_chooser_set_preview_widget        (GtkFileChooser *chooser,
+ 						       GtkWidget      *preview_widget);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GtkWidget *gtk_file_chooser_get_preview_widget        (GtkFileChooser *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void       gtk_file_chooser_set_preview_widget_active (GtkFileChooser *chooser,
+ 						       gboolean        active);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean   gtk_file_chooser_get_preview_widget_active (GtkFileChooser *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void       gtk_file_chooser_set_use_preview_label     (GtkFileChooser *chooser,
+ 						       gboolean        use_label);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean   gtk_file_chooser_get_use_preview_label     (GtkFileChooser *chooser);
+ 
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ char  *gtk_file_chooser_get_preview_filename (GtkFileChooser *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ char  *gtk_file_chooser_get_preview_uri      (GtkFileChooser *chooser);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GFile *gtk_file_chooser_get_preview_file     (GtkFileChooser *chooser);
+ 
+ /* Extra widget
+  */
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void       gtk_file_chooser_set_extra_widget (GtkFileChooser *chooser,
+ 					      GtkWidget      *extra_widget);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GtkWidget *gtk_file_chooser_get_extra_widget (GtkFileChooser *chooser);
+ 
+ /* List of user selectable filters
+  */
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void    gtk_file_chooser_add_filter    (GtkFileChooser *chooser,
+ 					GtkFileFilter  *filter);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void    gtk_file_chooser_remove_filter (GtkFileChooser *chooser,
+ 					GtkFileFilter  *filter);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GSList *gtk_file_chooser_list_filters  (GtkFileChooser *chooser);
+ 
+ /* Current filter
+  */
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ void           gtk_file_chooser_set_filter (GtkFileChooser *chooser,
+ 					   GtkFileFilter  *filter);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GtkFileFilter *gtk_file_chooser_get_filter (GtkFileChooser *chooser);
+ 
+ /* Per-application shortcut folders */
+ 
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_add_shortcut_folder    (GtkFileChooser *chooser,
+ 						  const char     *folder,
+ 						  GError        **error);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_remove_shortcut_folder (GtkFileChooser *chooser,
+ 						  const char     *folder,
+ 						  GError        **error);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GSList *gtk_file_chooser_list_shortcut_folders   (GtkFileChooser *chooser);
+ 
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_add_shortcut_folder_uri    (GtkFileChooser *chooser,
+ 						      const char     *uri,
+ 						      GError        **error);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ gboolean gtk_file_chooser_remove_shortcut_folder_uri (GtkFileChooser *chooser,
+ 						      const char     *uri,
+ 						      GError        **error);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_ALL
+ GSList *gtk_file_chooser_list_shortcut_folder_uris   (GtkFileChooser *chooser);
+ 
++__attribute__((weak))
+ GDK_AVAILABLE_IN_3_22
+ void        gtk_file_chooser_add_choice              (GtkFileChooser  *chooser,
+                                                       const char      *id,
+                                                       const char      *label,
+                                                       const char     **options,
+                                                       const char     **option_labels);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_3_22
+ void        gtk_file_chooser_remove_choice           (GtkFileChooser  *chooser,
+                                                       const char      *id);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_3_22
+ void        gtk_file_chooser_set_choice              (GtkFileChooser  *chooser,
+                                                       const char      *id,
+                                                       const char      *option);
++__attribute__((weak))
+ GDK_AVAILABLE_IN_3_22
+ const char *gtk_file_chooser_get_choice              (GtkFileChooser  *chooser,
+                                                       const char      *id);
+diff --git a/gtk/gtkfilechooserdialog.c b/gtk/gtkfilechooserdialog.c
+index db1d8f6..0681d2f 100644
+--- a/gtk/gtkfilechooserdialog.c
++++ b/gtk/gtkfilechooserdialog.c
+@@ -283,6 +283,10 @@ gtk_file_chooser_dialog_class_init (GtkFileChooserDialogClass *class)
+   gtk_widget_class_bind_template_callback (widget_class, file_chooser_widget_selection_changed);
+ }
+ 
++__attribute__((weak))
++GDK_AVAILABLE_IN_ALL
++void _d_ddefiledialog_override_gtk_dialog();
++
+ static void
+ gtk_file_chooser_dialog_init (GtkFileChooserDialog *dialog)
+ {
+@@ -294,6 +298,9 @@ gtk_file_chooser_dialog_init (GtkFileChooserDialog *dialog)
+ 
+   _gtk_file_chooser_set_delegate (GTK_FILE_CHOOSER (dialog),
+                                   GTK_FILE_CHOOSER (dialog->priv->widget));
++
++  if (_d_ddefiledialog_override_gtk_dialog)
++    _d_ddefiledialog_override_gtk_dialog(dialog);
+ }
+ 
+ static GtkWidget *
+diff --git a/testsuite/gtk/object.c b/testsuite/gtk/object.c
+index b561aa9..7ff3810 100644
+--- a/testsuite/gtk/object.c
++++ b/testsuite/gtk/object.c
+@@ -330,6 +330,9 @@ main (int   argc,
+ 
+   g_setenv ("GSETTINGS_BACKEND", "memory", TRUE);
+ 
++  /* when start test, not use dde-filedialog*/
++  g_setenv("_d_disable_filedialog", "true", TRUE);
++
+   /* initialize test program */
+   gtk_test_init (&argc, &argv);
+   gtk_test_register_all_types ();
+@@ -352,5 +355,11 @@ main (int   argc,
+       }
+ 
+   g_free (schema_dir);
+-  return g_test_run ();
++
++  int result = g_test_run ();
++
++  /* when end test, unset the env _d_disable_filedialog*/
++  g_unsetenv("_d_disable_filedialog");
++
++  return result;
+ }
+diff --git a/testsuite/gtk/objects-finalize.c b/testsuite/gtk/objects-finalize.c
+index 95b565c..1e0b717 100644
+--- a/testsuite/gtk/objects-finalize.c
++++ b/testsuite/gtk/objects-finalize.c
+@@ -85,6 +85,9 @@ main (int argc, char **argv)
+   g_setenv ("GIO_USE_VFS", "local", TRUE);
+   g_setenv ("GSETTINGS_BACKEND", "memory", TRUE);
+ 
++  /* when start test, not use dde-filedialog*/
++  g_setenv("_d_disable_filedialog", "true", TRUE);
++
+   /* initialize test program */
+   gtk_test_init (&argc, &argv);
+   gtk_test_register_all_types ();
+@@ -126,6 +129,8 @@ main (int argc, char **argv)
+ 
+   result = g_test_run();
+ 
++  /* when end test, unset the env _d_disable_filedialog*/
++  g_unsetenv("_d_disable_filedialog");
+   g_free (schema_dir);
+ 
+   return result;
+diff --git a/testsuite/gtk/templates.c b/testsuite/gtk/templates.c
+index 1827c5a..e191e42 100644
+--- a/testsuite/gtk/templates.c
++++ b/testsuite/gtk/templates.c
+@@ -351,6 +351,9 @@ main (int argc, char **argv)
+   /* initialize test program */
+   gtk_test_init (&argc, &argv);
+ 
++  /* when start test, not use dde-filedialog*/
++  g_setenv("_d_disable_filedialog", "true", TRUE);
++
+   /* g_test_build_filename must be called after gtk_test_init */
+   schema_dir = g_test_build_filename (G_TEST_BUILT, "", NULL);
+   if (g_getenv ("GTK_TEST_MESON") == NULL)
+@@ -391,6 +394,11 @@ main (int argc, char **argv)
+ #endif
+ 
+   g_free (schema_dir);
++  
++  int result = g_test_run();
++
++  /* when end test, unset the env _d_disable_filedialog*/
++  g_unsetenv("_d_disable_filedialog");
+ 
+-  return g_test_run();
++  return result;
+ }
+diff --git a/testsuite/reftests/gtk-reftest.c b/testsuite/reftests/gtk-reftest.c
+index 1a51a97..d1e5d4b 100644
+--- a/testsuite/reftests/gtk-reftest.c
++++ b/testsuite/reftests/gtk-reftest.c
+@@ -413,6 +413,9 @@ main (int argc, char **argv)
+    */
+   g_setenv ("GDK_RENDERING", "image", FALSE);
+ 
++  /* when start test, not use dde-filedialog*/
++  g_setenv("_d_disable_filedialog", "true", TRUE);
++
+   if (!parse_command_line (&argc, &argv))
+     return 1;
+ 
+@@ -453,6 +456,11 @@ main (int argc, char **argv)
+    */
+   chdir (basedir);
+ 
+-  return g_test_run ();
++  int result = g_test_run ();
++
++  /* when end test, unset the env _d_disable_filedialog*/
++  g_unsetenv("_d_disable_filedialog");
++
++  return result;
+ }
+ 
+-- 
+2.33.1
+
