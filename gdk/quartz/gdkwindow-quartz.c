@@ -22,6 +22,7 @@
 #include <gdk/gdk.h>
 #include <gdk/gdkdeviceprivate.h>
 #include <gdk/gdkdisplayprivate.h>
+#include <gdk/gdkframeclockprivate.h>
 
 #include "gdkwindowimpl.h"
 #include "gdkwindow-quartz.h"
@@ -31,6 +32,7 @@
 #include "gdkquartzscreen.h"
 #include "gdkquartzcursor.h"
 #include "gdkquartz-cocoa-access.h"
+#include "gdkinternal-quartz.h"
 
 #include <Carbon/Carbon.h>
 #include <AvailabilityMacros.h>
@@ -45,8 +47,6 @@ static GSList   *update_nswindows;
 static gboolean  in_process_all_updates = FALSE;
 
 static GSList *main_window_stack;
-
-void _gdk_quartz_window_flush (GdkWindowImplQuartz *window_impl);
 
 typedef struct
 {
@@ -124,23 +124,41 @@ gdk_quartz_window_init (GdkQuartzWindow *quartz_window)
 /*
  * GdkQuartzWindowImpl
  */
+static inline GdkWindowImplQuartz*
+gdk_window_get_quartz_impl (GdkWindow* window)
+{
+  GdkWindow *embedder;
+
+  if (GDK_WINDOW_DESTROYED (window))
+    return NULL;
+
+  embedder = gdk_offscreen_window_get_embedder (window);
+
+  while (embedder)
+    {
+      window = embedder;
+      embedder = gdk_offscreen_window_get_embedder (window);
+    }
+
+  g_return_val_if_fail (GDK_IS_WINDOW_IMPL_QUARTZ (window->impl), NULL);
+
+  return GDK_WINDOW_IMPL_QUARTZ (window->impl);
+}
 
 NSView *
 gdk_quartz_window_get_nsview (GdkWindow *window)
 {
-  if (GDK_WINDOW_DESTROYED (window))
-    return NULL;
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
 
-  return ((GdkWindowImplQuartz *)window->impl)->view;
+  return impl ? impl->view : NULL;
 }
 
 NSWindow *
 gdk_quartz_window_get_nswindow (GdkWindow *window)
 {
-  if (GDK_WINDOW_DESTROYED (window))
-    return NULL;
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
 
-  return ((GdkWindowImplQuartz *)window->impl)->toplevel;
+  return impl ? impl->toplevel : NULL;
 }
 
 static CGContextRef
@@ -148,7 +166,6 @@ gdk_window_impl_quartz_get_context (GdkWindowImplQuartz *window_impl,
 				    gboolean             antialias)
 {
   CGContextRef cg_context = NULL;
-  CGSize scale;
 
   if (GDK_WINDOW_DESTROYED (window_impl->wrapper))
     return NULL;
@@ -159,30 +176,30 @@ gdk_window_impl_quartz_get_context (GdkWindowImplQuartz *window_impl,
    * and for widgets that send fake expose events like the arrow
    * buttons in spinbuttons or the position marker in rulers.
    */
-  if (window_impl->in_paint_rect_count == 0)
+#if MAC_OS_X_VERSION_MAX_ALLOWED < 101400
+  if (gdk_quartz_osx_version() < GDK_OSX_MOJAVE &&
+      window_impl->in_paint_rect_count == 0)
     {
-      if (![window_impl->view lockFocusIfCanDraw])
-        return NULL;
+      /* The NSView focus-locking API set was deprecated in MacOS 10.14 and
+       * has a significant cost in MacOS 11 - every lock/unlock seems to
+       * trigger a drawRect: call for the entire window.  To return the
+       * lost performance, do not use the locking API in MacOS 11+
+       */
+         if (![window_impl->view lockFocusIfCanDraw])
+            return NULL;
     }
-#if MAC_OS_X_VERSION_MAX_ALLOWED < 101000
-    cg_context = [[NSGraphicsContext currentContext] graphicsPort];
-#else
+#endif
+#if MAC_OS_X_VERSION_MIN_REQUIRED < 101000
   if (gdk_quartz_osx_version () < GDK_OSX_YOSEMITE)
     cg_context = [[NSGraphicsContext currentContext] graphicsPort];
   else
-    cg_context = [[NSGraphicsContext currentContext] CGContext];
 #endif
+    cg_context = [[NSGraphicsContext currentContext] CGContext];
 
   if (!cg_context)
     return NULL;
   CGContextSaveGState (cg_context);
   CGContextSetAllowsAntialiasing (cg_context, antialias);
-
-  /* Undo the default scaling transform, since we apply our own
-   * in gdk_quartz_ref_cairo_surface () */
-  scale = CGContextConvertSizeToDeviceSpace (cg_context,
-                                             CGSizeMake (1.0, 1.0));
-  CGContextScaleCTM (cg_context, 1.0 / scale.width, 1.0 / scale.height);
 
   return cg_context;
 }
@@ -198,11 +215,14 @@ gdk_window_impl_quartz_release_context (GdkWindowImplQuartz *window_impl,
     }
 
   /* See comment in gdk_quartz_window_get_context(). */
-  if (window_impl->in_paint_rect_count == 0)
+#if MAC_OS_X_VERSION_MIN_REQUIRED < 101400
+  if (gdk_quartz_osx_version() < GDK_OSX_MOJAVE &&
+      window_impl->in_paint_rect_count == 0)
     {
-      _gdk_quartz_window_flush (window_impl);
+      [window_impl->toplevel flushWindow];
       [window_impl->view unlockFocus];
     }
+#endif
 }
 
 static void
@@ -218,57 +238,18 @@ gdk_window_impl_quartz_finalize (GObject *object)
     g_object_unref (impl->transient_for);
 
   if (impl->view)
-    [[NSNotificationCenter defaultCenter] removeObserver: impl->toplevel
-                                       name: @"NSViewFrameDidChangeNotification"
-                                     object: impl->view];
+    {
+      [[NSNotificationCenter defaultCenter] removeObserver: impl->toplevel
+                                        name: @"NSViewFrameDidChangeNotification"
+                                      object: impl->view];
+      [impl->view release];
+    }
+
+  impl->view = NULL;
+  impl->transient_for = NULL;
+  impl->toplevel = NULL;
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
-}
-
-/* Help preventing "beam sync penalty" where CG makes all graphics code
- * block until the next vsync if we try to flush (including call display on
- * a view) too often. We do this by limiting the manual flushing done
- * outside of expose calls to less than some frequency when measured over
- * the last 4 flushes. This is a bit arbitray, but seems to make it possible
- * for some quick manual flushes (such as gtkruler or gimp’s marching ants)
- * without hitting the max flush frequency.
- *
- * If drawable NULL, no flushing is done, only registering that a flush was
- * done externally.
- *
- * Note: As of MacOS 10.14 NSWindow flushWindow is deprecated because
- * Quartz has the ability to handle deferred drawing on its own.
- */
-void
-_gdk_quartz_window_flush (GdkWindowImplQuartz *window_impl)
-{
-#if MAC_OS_X_VERSION_MIN_REQUIRED < 101400
-  static struct timeval prev_tv;
-  static gint intervals[4];
-  static gint index;
-  struct timeval tv;
-  gint ms;
-
-  gettimeofday (&tv, NULL);
-  ms = (tv.tv_sec - prev_tv.tv_sec) * 1000 + (tv.tv_usec - prev_tv.tv_usec) / 1000;
-  intervals[index++ % 4] = ms;
-
-  if (window_impl)
-    {
-      ms = intervals[0] + intervals[1] + intervals[2] + intervals[3];
-
-      /* ~25Hz on average. */
-      if (ms > 4*40)
-        {
-          if (window_impl)
-            [window_impl->toplevel flushWindow];
-
-          prev_tv = tv;
-        }
-    }
-  else
-    prev_tv = tv;
-#endif
 }
 
 static cairo_user_data_key_t gdk_quartz_cairo_key;
@@ -282,11 +263,10 @@ static void
 gdk_quartz_cairo_surface_destroy (void *data)
 {
   GdkQuartzCairoSurfaceData *surface_data = data;
+  cairo_surface_t *surface = surface_data->window_impl->cairo_surface;
 
+  if (!cairo_surface_get_reference_count (surface))
   surface_data->window_impl->cairo_surface = NULL;
-
-  gdk_quartz_window_release_context (surface_data->window_impl,
-                                     surface_data->cg_context);
 
   g_free (surface_data);
 }
@@ -296,22 +276,15 @@ gdk_quartz_create_cairo_surface (GdkWindowImplQuartz *impl,
 				 int                  width,
 				 int                  height)
 {
-  CGContextRef cg_context;
   GdkQuartzCairoSurfaceData *surface_data;
   cairo_surface_t *surface;
 
-  cg_context = gdk_quartz_window_get_context (impl, TRUE);
-
   surface_data = g_new (GdkQuartzCairoSurfaceData, 1);
   surface_data->window_impl = impl;
-  surface_data->cg_context = cg_context;
+  surface_data->cg_context = NULL;
 
-  if (cg_context)
-    surface = cairo_quartz_surface_create_for_cg_context (cg_context,
-                                                          width, height);
-  else
-    surface = cairo_quartz_surface_create(CAIRO_FORMAT_ARGB32, width, height);
-
+  [impl->view createBackingStoreWithWidth: width andHeight: height];
+  surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
   cairo_surface_set_user_data (surface, &gdk_quartz_cairo_key,
                                surface_data,
                                gdk_quartz_cairo_surface_destroy);
@@ -322,37 +295,65 @@ gdk_quartz_create_cairo_surface (GdkWindowImplQuartz *impl,
 static cairo_surface_t *
 gdk_quartz_ref_cairo_surface (GdkWindow *window)
 {
-  GdkWindowImplQuartz *impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
 
-  if (GDK_WINDOW_DESTROYED (window))
+  if (GDK_WINDOW_DESTROYED (window) || !impl)
     return NULL;
 
   if (!impl->cairo_surface)
     {
+      gint width = gdk_window_get_width (impl->wrapper);
+      gint height = gdk_window_get_height (impl->wrapper);
       gint scale = gdk_window_get_scale_factor (impl->wrapper);
+      gint scaled_width = width * scale;
+      const gint align = GDK_WINDOW_QUARTZ_ALIGNMENT;
 
-      impl->cairo_surface = 
-          gdk_quartz_create_cairo_surface (impl,
-                                           gdk_window_get_width (impl->wrapper) * scale,
-                                           gdk_window_get_height (impl->wrapper) * scale);
+      if (scaled_width % align)
+          scaled_width += align - scaled_width % align; // Surface widths must be 4-pixel aligned
 
+      impl->cairo_surface = gdk_quartz_create_cairo_surface (impl,
+                                                             scaled_width,
+                                                             height * scale);
       cairo_surface_set_device_scale (impl->cairo_surface, scale, scale);
+      cairo_surface_reference (impl->cairo_surface); // The caller will destroy the returned one.
     }
   else
-    cairo_surface_reference (impl->cairo_surface);
+    {
+      cairo_surface_reference (impl->cairo_surface);
+    }
 
   return impl->cairo_surface;
+}
+
+void
+_gdk_quartz_unref_cairo_surface (GdkWindow *window)
+{
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
+  if (GDK_WINDOW_DESTROYED (window) || !impl)
+    return;
+
+  if (impl->cairo_surface)
+    {
+      cairo_surface_destroy (impl->cairo_surface);
+      if (impl->cairo_surface &&
+          !cairo_surface_get_reference_count (impl->cairo_surface))
+          impl->cairo_surface = NULL;
+    }
 }
 
 static void
 gdk_window_impl_quartz_init (GdkWindowImplQuartz *impl)
 {
   impl->type_hint = GDK_WINDOW_TYPE_HINT_NORMAL;
+  impl->view      = NULL;
+  impl->toplevel  = NULL;
+  impl->transient_for = NULL;
 }
 
 static gboolean
 gdk_window_impl_quartz_begin_paint (GdkWindow *window)
 {
+     gdk_quartz_ref_cairo_surface (window); //unreffed in GdkQuartzView::updateLayer
   return FALSE;
 }
 
@@ -363,7 +364,10 @@ gdk_quartz_window_set_needs_display_in_region (GdkWindow    *window,
   GdkWindowImplQuartz *impl;
   int i, n_rects;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
+
+  if (!impl)
+    return;
 
   if (!impl->needs_display_region)
     impl->needs_display_region = cairo_region_create ();
@@ -389,27 +393,25 @@ _gdk_quartz_window_process_updates_recurse (GdkWindow *window,
    */
   if (in_process_all_updates)
     {
-      GdkWindow *toplevel;
+      GdkWindow *toplevel= gdk_window_get_effective_toplevel (window);
+      GdkWindowImplQuartz *toplevel_impl =
+            gdk_window_get_quartz_impl (toplevel);
 
-      toplevel = gdk_window_get_effective_toplevel (window);
-      if (toplevel && WINDOW_IS_TOPLEVEL (toplevel))
+      if (toplevel && WINDOW_IS_TOPLEVEL (toplevel) && toplevel_impl)
         {
-          GdkWindowImplQuartz *toplevel_impl;
-          NSWindow *nswindow;
-
-          toplevel_impl = (GdkWindowImplQuartz *)toplevel->impl;
-          nswindow = toplevel_impl->toplevel;
+          NSWindow *nswindow = toplevel_impl->toplevel;
 #if MAC_OS_X_VERSION_MIN_REQUIRED < 101400
           /* In theory, we could skip the flush disabling, since we only
            * have one NSView.
            */
-          if (nswindow && ![nswindow isFlushWindowDisabled]) 
+          if (gdk_quartz_osx_version() < GDK_OSX_MOJAVE &&
+               nswindow && ![nswindow isFlushWindowDisabled])
             {
               [nswindow retain];
               [nswindow disableFlushWindow];
-              update_nswindows = g_slist_prepend (update_nswindows, nswindow);
             }
 #endif
+          update_nswindows = g_slist_prepend (update_nswindows, nswindow);
         }
     }
 
@@ -454,10 +456,12 @@ _gdk_quartz_display_after_process_all_updates (GdkDisplay *display)
 
       [[nswindow contentView] displayIfNeeded];
 
-      _gdk_quartz_window_flush (NULL);
 #if MAC_OS_X_VERSION_MIN_REQUIRED < 101400
-      [nswindow enableFlushWindow];
-      [nswindow flushWindow];
+      if(gdk_quartz_osx_version() < GDK_OSX_BIGSUR)
+        {
+          [nswindow enableFlushWindow];
+          [nswindow flushWindow];
+        }
 #endif
       [nswindow release];
 
@@ -664,15 +668,17 @@ find_child_window_helper (GdkWindow *window,
   GdkWindowImplQuartz *impl;
   GList *l;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
 
   if (window == _gdk_root)
     update_toplevel_order ();
 
+  g_return_val_if_fail (impl, NULL);
+
   for (l = impl->sorted_children; l; l = l->next)
     {
       GdkWindow *child = l->data;
-      GdkWindowImplQuartz *child_impl = GDK_WINDOW_IMPL_QUARTZ (child->impl);
+      GdkWindowImplQuartz *child_impl = gdk_window_get_quartz_impl (child);
       int temp_x, temp_y;
 
       if (!GDK_WINDOW_IS_MAPPED (child))
@@ -687,7 +693,7 @@ find_child_window_helper (GdkWindow *window,
        * better way to deal with the events in gdkevents-quartz, this
        * might not be needed.)
        */
-      if (window == _gdk_root)
+      if (child_impl && window == _gdk_root)
         {
           NSRect frame = NSMakeRect (0, 0, 100, 100);
           NSRect content;
@@ -723,7 +729,7 @@ find_child_window_helper (GdkWindow *window,
                                            get_toplevel);
 	}
     }
-  
+
   return window;
 }
 
@@ -756,23 +762,27 @@ raise_transient (GdkWindowImplQuartz *impl)
    * parent and then add it back in.
    */
   GdkWindowImplQuartz *parent_impl =
-        GDK_WINDOW_IMPL_QUARTZ (impl->transient_for->impl);
-  [parent_impl->toplevel removeChildWindow:impl->toplevel];
-  [parent_impl->toplevel addChildWindow:impl->toplevel
-                         ordered:NSWindowAbove];
+        gdk_window_get_quartz_impl (impl->transient_for);
+  if (parent_impl)
+    {
+      [parent_impl->toplevel removeChildWindow:impl->toplevel];
+      [parent_impl->toplevel addChildWindow:impl->toplevel
+                                    ordered:NSWindowAbove];
+    }
 }
 
 void
 _gdk_quartz_window_did_become_main (GdkWindow *window)
 {
-  GdkWindowImplQuartz *impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
 
   main_window_stack = g_slist_remove (main_window_stack, window);
 
   if (window->window_type != GDK_WINDOW_TEMP)
     main_window_stack = g_slist_prepend (main_window_stack, window);
 
-  if (impl->transient_for)
+  if (impl &&
+      impl->transient_for && !GDK_WINDOW_DESTROYED (impl->transient_for))
     raise_transient (impl);
 
   clear_toplevel_order ();
@@ -800,9 +810,10 @@ _gdk_quartz_window_did_resign_main (GdkWindow *window)
       GDK_WINDOW_IS_MAPPED (new_window) &&
       WINDOW_IS_TOPLEVEL (new_window))
     {
-      GdkWindowImplQuartz *impl = GDK_WINDOW_IMPL_QUARTZ (new_window->impl);
+      GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (new_window);
 
-      [impl->toplevel makeKeyAndOrderFront:impl->toplevel];
+      if (impl)
+        [impl->toplevel makeKeyAndOrderFront:impl->toplevel];
     }
 
   clear_toplevel_order ();
@@ -836,6 +847,29 @@ get_nsscreen_for_point (gint x, gint y)
   return screen;
 }
 
+static void
+on_frame_clock_before_paint (GdkFrameClock *frame_clock,
+                             GdkWindow     *window)
+{
+}
+
+static void
+on_frame_clock_after_paint (GdkFrameClock *frame_clock,
+                            GdkWindow     *window)
+{
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
+  GdkDisplay *display = gdk_window_get_display (window);
+  GdkFrameTimings *timings;
+
+  timings = gdk_frame_clock_get_current_timings (frame_clock);
+  if (impl && timings != NULL)
+    impl->pending_frame_counter = timings->frame_counter;
+
+  _gdk_quartz_display_add_frame_callback (display, window);
+
+  _gdk_frame_clock_freeze (frame_clock);
+}
+
 void
 _gdk_quartz_display_create_window_impl (GdkDisplay    *display,
                                         GdkWindow     *window,
@@ -848,6 +882,7 @@ _gdk_quartz_display_create_window_impl (GdkDisplay    *display,
   GdkWindowImplQuartz *impl;
   GdkWindowImplQuartz *parent_impl;
   GdkWindowTypeHint    type_hint = GDK_WINDOW_TYPE_HINT_NORMAL;
+  GdkFrameClock *frame_clock;
 
   GDK_QUARTZ_ALLOC_POOL;
 
@@ -855,7 +890,7 @@ _gdk_quartz_display_create_window_impl (GdkDisplay    *display,
   window->impl = GDK_WINDOW_IMPL (impl);
   impl->wrapper = window;
 
-  parent_impl = GDK_WINDOW_IMPL_QUARTZ (window->parent->impl);
+  parent_impl = gdk_window_get_quartz_impl (window->parent);
 
   switch (window->window_type)
     {
@@ -864,12 +899,12 @@ _gdk_quartz_display_create_window_impl (GdkDisplay    *display,
       if (GDK_WINDOW_TYPE (window->parent) != GDK_WINDOW_ROOT)
 	{
 	  /* The common code warns for this case */
-          parent_impl = GDK_WINDOW_IMPL_QUARTZ (_gdk_root->impl);
+          parent_impl = gdk_window_get_quartz_impl (_gdk_root);
 	}
     }
 
   /* Maintain the z-ordered list of children. */
-  if (window->parent != _gdk_root)
+  if (parent_impl && window->parent != _gdk_root)
     parent_impl->sorted_children = g_list_prepend (parent_impl->sorted_children, window);
   else
     clear_toplevel_order ();
@@ -877,8 +912,6 @@ _gdk_quartz_display_create_window_impl (GdkDisplay    *display,
   gdk_window_set_cursor (window, ((attributes_mask & GDK_WA_CURSOR) ?
 				  (attributes->cursor) :
 				  NULL));
-
-  impl->view = NULL;
 
   if (attributes_mask & GDK_WA_TYPE_HINT)
     {
@@ -897,6 +930,8 @@ _gdk_quartz_display_create_window_impl (GdkDisplay    *display,
         NSUInteger style_mask;
         int nx, ny;
         const char *title;
+        const gint scale = gdk_window_get_scale_factor (window);
+        const guint align = GDK_WINDOW_QUARTZ_ALIGNMENT / scale;
 
         /* initWithContentRect will place on the mainScreen by default.
          * We want to select the screen to place on ourselves.  We need
@@ -909,6 +944,9 @@ _gdk_quartz_display_create_window_impl (GdkDisplay    *display,
         screen_rect = [screen frame];
         nx -= screen_rect.origin.x;
         ny -= screen_rect.origin.y;
+
+        if (window->width % align)
+          window->width += align - window->width % align;
 
         content_rect = NSMakeRect (nx, ny - window->height,
                                    window->width,
@@ -959,15 +997,14 @@ _gdk_quartz_display_create_window_impl (GdkDisplay    *display,
                                       selector: @selector (windowDidResize:)
                                       name: @"NSViewFrameDidChangeNotification"
                                       object: impl->view];
-	[impl->view release];
       }
       break;
 
     case GDK_WINDOW_CHILD:
       {
-	GdkWindowImplQuartz *parent_impl = GDK_WINDOW_IMPL_QUARTZ (window->parent->impl);
+	GdkWindowImplQuartz *parent_impl = gdk_window_get_quartz_impl (window->parent);
 
-	if (!window->input_only)
+	if (parent_impl && !window->input_only)
 	  {
 	    NSRect frame_rect = NSMakeRect (window->x + window->parent->abs_x,
                                             window->y + window->parent->abs_y,
@@ -981,7 +1018,6 @@ _gdk_quartz_display_create_window_impl (GdkDisplay    *display,
 	    /* GdkWindows should be hidden by default */
 	    [impl->view setHidden:YES];
 	    [parent_impl->view addSubview:impl->view];
-	    [impl->view release];
 	  }
       }
       break;
@@ -991,6 +1027,16 @@ _gdk_quartz_display_create_window_impl (GdkDisplay    *display,
     }
 
   GDK_QUARTZ_RELEASE_POOL;
+
+  if (attributes_mask & GDK_WA_TYPE_HINT)
+    gdk_window_set_type_hint (window, attributes->type_hint);
+
+  frame_clock = gdk_window_get_frame_clock (window);
+
+  g_signal_connect (frame_clock, "before-paint",
+                    G_CALLBACK (on_frame_clock_before_paint), window);
+  g_signal_connect (frame_clock, "after-paint",
+                    G_CALLBACK (on_frame_clock_after_paint), window);
 }
 
 void
@@ -998,7 +1044,10 @@ _gdk_quartz_window_update_position (GdkWindow *window)
 {
   NSRect frame_rect;
   NSRect content_rect;
-  GdkWindowImplQuartz *impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
+
+  if (!impl)
+    return;
 
   GDK_QUARTZ_ALLOC_POOL;
 
@@ -1008,7 +1057,6 @@ _gdk_quartz_window_update_position (GdkWindow *window)
   _gdk_quartz_window_xy_to_gdk_xy (content_rect.origin.x,
                                    content_rect.origin.y + content_rect.size.height,
                                    &window->x, &window->y);
-
 
   GDK_QUARTZ_RELEASE_POOL;
 }
@@ -1027,7 +1075,13 @@ _gdk_quartz_window_init_windowing (GdkDisplay *display,
   _gdk_root->impl_window = _gdk_root;
   _gdk_root->visual = gdk_screen_get_system_visual (screen);
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (_gdk_root->impl);
+  impl = gdk_window_get_quartz_impl (_gdk_root);
+  /* If impl is somehow not a GdkWindowImplQuartz we're screwed, so crash. */
+  if (!impl)
+    {
+      g_error ("Initializing quartz windowing produced the wrong kind of impl!");
+      g_abort ();
+    }
 
   _gdk_quartz_screen_update_window_sizes (screen);
 
@@ -1046,8 +1100,16 @@ gdk_quartz_window_destroy (GdkWindow *window,
 {
   GdkWindowImplQuartz *impl;
   GdkWindow *parent;
+  GdkDisplay *display;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
+
+  if (!impl)
+    return;
+
+  display = gdk_window_get_display (window);
+
+  _gdk_quartz_display_remove_frame_callback (display, window);
 
   main_window_stack = g_slist_remove (main_window_stack, window);
 
@@ -1057,9 +1119,10 @@ gdk_quartz_window_destroy (GdkWindow *window,
   parent = window->parent;
   if (parent)
     {
-      GdkWindowImplQuartz *parent_impl = GDK_WINDOW_IMPL_QUARTZ (parent->impl);
+      GdkWindowImplQuartz *parent_impl = gdk_window_get_quartz_impl (parent);
 
-      parent_impl->sorted_children = g_list_remove (parent_impl->sorted_children, window);
+      if (parent_impl)
+        parent_impl->sorted_children = g_list_remove (parent_impl->sorted_children, window);
     }
 
   if (impl->cairo_surface)
@@ -1079,6 +1142,9 @@ gdk_quartz_window_destroy (GdkWindow *window,
       else if (impl->view)
 	[impl->view removeFromSuperview];
 
+      impl->view = NULL;
+      impl->toplevel = NULL;
+
       GDK_QUARTZ_RELEASE_POOL;
     }
 }
@@ -1095,8 +1161,11 @@ gdk_quartz_window_destroy_foreign (GdkWindow *window)
 static void
 gdk_window_quartz_show (GdkWindow *window, gboolean already_mapped)
 {
-  GdkWindowImplQuartz *impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
   gboolean focus_on_map;
+
+  if (!impl)
+    return;
 
   GDK_QUARTZ_ALLOC_POOL;
 
@@ -1139,7 +1208,7 @@ gdk_window_quartz_show (GdkWindow *window, gboolean already_mapped)
 }
 
 /* Temporarily unsets the parent window, if the window is a
- * transient. 
+ * transient.
  */
 void
 _gdk_quartz_window_detach_from_parent (GdkWindow *window)
@@ -1148,17 +1217,20 @@ _gdk_quartz_window_detach_from_parent (GdkWindow *window)
 
   g_return_if_fail (GDK_IS_WINDOW (window));
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
-  
-  g_return_if_fail (impl->toplevel != NULL);
+  impl = gdk_window_get_quartz_impl (window);
+
+  g_return_if_fail (impl && impl->toplevel != NULL);
 
   if (impl->transient_for && !GDK_WINDOW_DESTROYED (impl->transient_for))
     {
       GdkWindowImplQuartz *parent_impl;
 
-      parent_impl = GDK_WINDOW_IMPL_QUARTZ (impl->transient_for->impl);
-      [parent_impl->toplevel removeChildWindow:impl->toplevel];
-      clear_toplevel_order ();
+      parent_impl = gdk_window_get_quartz_impl (impl->transient_for);
+      if (parent_impl)
+        {
+          [parent_impl->toplevel removeChildWindow:impl->toplevel];
+          clear_toplevel_order ();
+        }
     }
 }
 
@@ -1170,17 +1242,20 @@ _gdk_quartz_window_attach_to_parent (GdkWindow *window)
 
   g_return_if_fail (GDK_IS_WINDOW (window));
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
-  
-  g_return_if_fail (impl->toplevel != NULL);
+  impl = gdk_window_get_quartz_impl (window);
+
+  g_return_if_fail (impl && impl->toplevel != NULL);
 
   if (impl->transient_for && !GDK_WINDOW_DESTROYED (impl->transient_for))
     {
       GdkWindowImplQuartz *parent_impl;
 
-      parent_impl = GDK_WINDOW_IMPL_QUARTZ (impl->transient_for->impl);
-      [parent_impl->toplevel addChildWindow:impl->toplevel ordered:NSWindowAbove];
-      clear_toplevel_order ();
+      parent_impl = gdk_window_get_quartz_impl (impl->transient_for);
+      if (parent_impl)
+        {
+          [parent_impl->toplevel addChildWindow:impl->toplevel ordered:NSWindowAbove];
+          clear_toplevel_order ();
+        }
     }
 }
 
@@ -1200,9 +1275,11 @@ gdk_window_quartz_hide (GdkWindow *window)
 
   _gdk_window_clear_update_area (window);
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
+  if (!impl)
+    return;
 
-  if (WINDOW_IS_TOPLEVEL (window)) 
+  if (WINDOW_IS_TOPLEVEL (window))
     {
      /* Update main window. */
       main_window_stack = g_slist_remove (main_window_stack, window);
@@ -1244,7 +1321,10 @@ move_resize_window_internal (GdkWindow *window,
   if (GDK_WINDOW_DESTROYED (window))
     return;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
+
+  if (!impl)
+    return;
 
   if ((x == -1 || (x == window->x)) &&
       (y == -1 || (y == window->y)) &&
@@ -1287,10 +1367,14 @@ move_resize_window_internal (GdkWindow *window,
     }
 
   if (width != -1)
-    window->width = width;
+    {
+      window->width = width;
+    }
 
   if (height != -1)
-    window->height = height;
+    {
+      window->height = height;
+    }
 
   GDK_QUARTZ_ALLOC_POOL;
 
@@ -1307,6 +1391,8 @@ move_resize_window_internal (GdkWindow *window,
 
       frame_rect = [impl->toplevel frameRectForContentRect:content_rect];
       [impl->toplevel setFrame:frame_rect display:YES];
+      impl->cairo_surface = gdk_quartz_ref_cairo_surface (window);
+      cairo_surface_destroy (impl->cairo_surface); // Remove the extra reference
     }
   else 
     {
@@ -1453,14 +1539,21 @@ gdk_window_quartz_reparent (GdkWindow *window,
       return FALSE;
     }
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
+  if (!impl)
+    return FALSE;
   view = impl->view;
 
-  new_parent_impl = GDK_WINDOW_IMPL_QUARTZ (new_parent->impl);
+  new_parent_impl = gdk_window_get_quartz_impl (new_parent);
+  if (!new_parent_impl)
+    return FALSE;
+
   new_parent_view = new_parent_impl->view;
 
   old_parent = window->parent;
-  old_parent_impl = GDK_WINDOW_IMPL_QUARTZ (old_parent->impl);
+  old_parent_impl = gdk_window_get_quartz_impl (old_parent);
+  if (!old_parent_impl)
+    return FALSE;
 
   [view retain];
 
@@ -1493,9 +1586,9 @@ update_toplevel_order (void)
   id nswindow;
   GList *toplevels = NULL;
 
-  root_impl = GDK_WINDOW_IMPL_QUARTZ (_gdk_root->impl);
+  root_impl = gdk_window_get_quartz_impl (_gdk_root);
 
-  if (root_impl->sorted_children)
+  if (!root_impl || root_impl->sorted_children)
     return;
 
   GDK_QUARTZ_ALLOC_POOL;
@@ -1522,10 +1615,12 @@ clear_toplevel_order (void)
 {
   GdkWindowImplQuartz *root_impl;
 
-  root_impl = GDK_WINDOW_IMPL_QUARTZ (_gdk_root->impl);
-
-  g_list_free (root_impl->sorted_children);
-  root_impl->sorted_children = NULL;
+  root_impl = gdk_window_get_quartz_impl (_gdk_root);
+  if (root_impl)
+    {
+      g_list_free (root_impl->sorted_children);
+      root_impl->sorted_children = NULL;
+    }
 }
 
 static void
@@ -1538,9 +1633,10 @@ gdk_window_quartz_raise (GdkWindow *window)
     {
       GdkWindowImplQuartz *impl;
 
-      impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
-
-      if (impl->transient_for)
+      impl = gdk_window_get_quartz_impl (window);
+      if (!impl)
+        return;
+      if (impl->transient_for && !GDK_WINDOW_DESTROYED (impl->transient_for))
         raise_transient (impl);
       else
         [impl->toplevel orderFront:impl->toplevel];
@@ -1555,10 +1651,12 @@ gdk_window_quartz_raise (GdkWindow *window)
         {
           GdkWindowImplQuartz *impl;
 
-          impl = (GdkWindowImplQuartz *)parent->impl;
-
-          impl->sorted_children = g_list_remove (impl->sorted_children, window);
-          impl->sorted_children = g_list_prepend (impl->sorted_children, window);
+          impl = gdk_window_get_quartz_impl (parent);
+          if (impl)
+            {
+              impl->sorted_children = g_list_remove (impl->sorted_children, window);
+              impl->sorted_children = g_list_prepend (impl->sorted_children, window);
+            }
         }
     }
 }
@@ -1573,10 +1671,13 @@ gdk_window_quartz_lower (GdkWindow *window)
     {
       GdkWindowImplQuartz *impl;
 
-      impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
-      [impl->toplevel orderBack:impl->toplevel];
+      impl = gdk_window_get_quartz_impl (window);
+      if (impl)
+        {
+          [impl->toplevel orderBack:impl->toplevel];
 
-      clear_toplevel_order ();
+          clear_toplevel_order ();
+        }
     }
   else
     {
@@ -1586,10 +1687,12 @@ gdk_window_quartz_lower (GdkWindow *window)
         {
           GdkWindowImplQuartz *impl;
 
-          impl = (GdkWindowImplQuartz *)parent->impl;
-
-          impl->sorted_children = g_list_remove (impl->sorted_children, window);
-          impl->sorted_children = g_list_append (impl->sorted_children, window);
+          impl = gdk_window_get_quartz_impl (parent);
+          if (impl)
+            {
+              impl->sorted_children = g_list_remove (impl->sorted_children, window);
+              impl->sorted_children = g_list_append (impl->sorted_children, window);
+            }
         }
     }
 }
@@ -1600,13 +1703,15 @@ gdk_window_quartz_restack_toplevel (GdkWindow *window,
 				    gboolean   above)
 {
   GdkWindowImplQuartz *impl;
-  gint sibling_num;
+  gint sibling_num = -1;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (sibling->impl);
-  sibling_num = [impl->toplevel windowNumber];
+  impl = gdk_window_get_quartz_impl (sibling);
+  if (impl)
+    sibling_num = [impl->toplevel windowNumber];
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
-
+  impl = gdk_window_get_quartz_impl (window);
+  if (!(impl && sibling_num >= 0))
+    return;
   if (above)
     [impl->toplevel orderWindow:NSWindowAbove relativeTo:sibling_num];
   else
@@ -1650,7 +1755,9 @@ gdk_window_quartz_get_geometry (GdkWindow *window,
   if (GDK_WINDOW_DESTROYED (window))
     return;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
+  if (!impl)
+    return;
   if (window == _gdk_root)
     {
       if (x) 
@@ -1742,7 +1849,10 @@ gdk_window_quartz_get_root_coords (GdkWindow *window,
     }
   
   toplevel = gdk_window_get_toplevel (window);
-  impl = GDK_WINDOW_IMPL_QUARTZ (toplevel->impl);
+  impl = gdk_window_get_quartz_impl (toplevel);
+
+  if (!impl)
+    return;
 
   content_rect = [impl->toplevel contentRectForFrameRect:[impl->toplevel frame]];
 
@@ -1809,8 +1919,8 @@ gdk_window_quartz_get_device_state_helper (GdkWindow       *window,
       GdkWindowImplQuartz *impl;
       NSWindow *nswindow;
 
-      impl = GDK_WINDOW_IMPL_QUARTZ (toplevel->impl);
-      nswindow = impl->toplevel;
+      impl = gdk_window_get_quartz_impl (toplevel);
+      nswindow = impl ? impl->toplevel : NULL;
 
       point = [nswindow mouseLocationOutsideOfEventStream];
 
@@ -1885,8 +1995,8 @@ gdk_quartz_window_set_geometry_hints (GdkWindow         *window,
       !WINDOW_IS_TOPLEVEL (window))
     return;
   
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
-  if (!impl->toplevel)
+  impl = gdk_window_get_quartz_impl (window);
+  if (!(impl && impl->toplevel))
     return;
 
   if (geom_mask & GDK_HINT_POS)
@@ -1972,9 +2082,9 @@ gdk_quartz_window_set_title (GdkWindow   *window,
       !WINDOW_IS_TOPLEVEL (window))
     return;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
 
-  if (impl->toplevel)
+  if (impl && impl->toplevel)
     {
       GDK_QUARTZ_ALLOC_POOL;
       [impl->toplevel setTitle:[NSString stringWithUTF8String:title]];
@@ -2011,8 +2121,8 @@ gdk_quartz_window_set_transient_for (GdkWindow *window,
       !WINDOW_IS_TOPLEVEL (window))
     return;
 
-  window_impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
-  if (!window_impl->toplevel)
+  window_impl = gdk_window_get_quartz_impl (window);
+  if (!(window_impl && window_impl->toplevel))
     return;
 
   GDK_QUARTZ_ALLOC_POOL;
@@ -2025,8 +2135,8 @@ gdk_quartz_window_set_transient_for (GdkWindow *window,
       window_impl->transient_for = NULL;
     }
 
-  parent_impl = GDK_WINDOW_IMPL_QUARTZ (parent->impl);
-  if (parent_impl->toplevel)
+  parent_impl = gdk_window_get_quartz_impl (parent);
+  if (parent_impl && parent_impl->toplevel)
     {
       /* We save the parent because it needs to be unset/reset when
        * hiding and showing the window. 
@@ -2104,11 +2214,12 @@ gdk_quartz_window_focus (GdkWindow *window,
                          guint32    timestamp)
 {
   GdkWindowImplQuartz *impl;
-	
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+
+  impl = gdk_window_get_quartz_impl (window);
 
   if (GDK_WINDOW_DESTROYED (window) ||
-      !WINDOW_IS_TOPLEVEL (window))
+      !WINDOW_IS_TOPLEVEL (window) ||
+      !impl)
     return;
 
   if (window->accept_focus && window->window_type != GDK_WINDOW_TEMP)
@@ -2273,7 +2384,10 @@ gdk_quartz_window_set_type_hint (GdkWindow        *window,
       !WINDOW_IS_TOPLEVEL (window))
     return;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
+
+  if (!impl)
+    return;
 
   impl->type_hint = hint;
 
@@ -2295,7 +2409,7 @@ gdk_quartz_window_get_type_hint (GdkWindow *window)
       !WINDOW_IS_TOPLEVEL (window))
     return GDK_WINDOW_TYPE_HINT_NORMAL;
   
-  return GDK_WINDOW_IMPL_QUARTZ (window->impl)->type_hint;
+  return gdk_window_get_quartz_impl (window)->type_hint;
 }
 
 static void
@@ -2347,11 +2461,11 @@ gdk_quartz_window_begin_resize_drag (GdkWindow     *window,
   if (GDK_WINDOW_DESTROYED (window))
     return;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
 
-  if (!impl->toplevel)
+  if (!(impl && impl->toplevel))
     {
-      g_warning ("Can't call gdk_window_begin_resize_drag on non-toplevel window");
+      g_warning ("Can't call gdk_window_begin_resize_drag on non-quartz or non-toplevel window");
       return;
     }
 
@@ -2372,11 +2486,11 @@ gdk_quartz_window_begin_move_drag (GdkWindow *window,
       !WINDOW_IS_TOPLEVEL (window))
     return;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
 
-  if (!impl->toplevel)
+  if (!(impl && impl->toplevel))
     {
-      g_warning ("Can't call gdk_window_begin_move_drag on non-toplevel window");
+      g_warning ("Can't call gdk_window_begin_move_drag on non-quartz or non-toplevel window");
       return;
     }
 
@@ -2407,7 +2521,10 @@ gdk_quartz_window_get_frame_extents (GdkWindow    *window,
   rect->height = 1;
   
   toplevel = gdk_window_get_effective_toplevel (window);
-  impl = GDK_WINDOW_IMPL_QUARTZ (toplevel->impl);
+  impl = gdk_window_get_quartz_impl (toplevel);
+
+  if (!impl)
+    return;
 
   ns_rect = [impl->toplevel frame];
 
@@ -2439,10 +2556,11 @@ gdk_quartz_window_set_decorations (GdkWindow       *window,
       !WINDOW_IS_TOPLEVEL (window))
     return;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
 
   if (GDK_WINDOW_TYPE (window) == GDK_WINDOW_TEMP ||
-      impl->type_hint == GDK_WINDOW_TYPE_HINT_SPLASHSCREEN )
+      (impl &&
+       impl->type_hint == GDK_WINDOW_TYPE_HINT_SPLASHSCREEN ))
     {
       new_mask = GDK_QUARTZ_BORDERLESS_WINDOW;
     }
@@ -2564,12 +2682,13 @@ gdk_quartz_window_get_decorations (GdkWindow       *window,
       !WINDOW_IS_TOPLEVEL (window))
     return FALSE;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
 
   if (decorations)
     {
       /* Borderless is 0, so we can't check it as a bit being set. */
-      if ([impl->toplevel styleMask] == GDK_QUARTZ_BORDERLESS_WINDOW)
+      if (impl &&
+          [impl->toplevel styleMask] == GDK_QUARTZ_BORDERLESS_WINDOW)
         {
           *decorations = 0;
         }
@@ -2592,7 +2711,7 @@ gdk_quartz_window_set_functions (GdkWindow    *window,
 
   g_return_if_fail (GDK_IS_WINDOW (window));
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
 
   if (functions & GDK_FUNC_ALL)
     {
@@ -2607,7 +2726,7 @@ gdk_quartz_window_set_functions (GdkWindow    *window,
       close = (functions & GDK_FUNC_CLOSE);
     }
 
-  if (impl->toplevel)
+  if (impl && impl->toplevel)
     {
       NSUInteger mask = [impl->toplevel styleMask];
 
@@ -2656,10 +2775,11 @@ gdk_quartz_window_maximize (GdkWindow *window)
       !WINDOW_IS_TOPLEVEL (window))
     return;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
   maximized = gdk_window_get_state (window) & GDK_WINDOW_STATE_MAXIMIZED;
 
-  if (GDK_WINDOW_IS_MAPPED (window))
+  if (GDK_WINDOW_IS_MAPPED (window) &&
+      impl)
     {
       GDK_QUARTZ_ALLOC_POOL;
 
@@ -2680,10 +2800,11 @@ gdk_quartz_window_unmaximize (GdkWindow *window)
       !WINDOW_IS_TOPLEVEL (window))
     return;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
   maximized = gdk_window_get_state (window) & GDK_WINDOW_STATE_MAXIMIZED;
 
-  if (GDK_WINDOW_IS_MAPPED (window))
+  if (GDK_WINDOW_IS_MAPPED (window) &&
+      impl)
     {
       GDK_QUARTZ_ALLOC_POOL;
 
@@ -2703,9 +2824,10 @@ gdk_quartz_window_iconify (GdkWindow *window)
       !WINDOW_IS_TOPLEVEL (window))
     return;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
 
-  if (GDK_WINDOW_IS_MAPPED (window))
+  if (GDK_WINDOW_IS_MAPPED (window) &&
+      impl)
     {
       GDK_QUARTZ_ALLOC_POOL;
 
@@ -2731,9 +2853,10 @@ gdk_quartz_window_deiconify (GdkWindow *window)
       !WINDOW_IS_TOPLEVEL (window))
     return;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
 
-  if (GDK_WINDOW_IS_MAPPED (window))
+  if (GDK_WINDOW_IS_MAPPED (window) &&
+      impl)
     {
       GDK_QUARTZ_ALLOC_POOL;
 
@@ -2753,10 +2876,11 @@ gdk_quartz_window_deiconify (GdkWindow *window)
 static gboolean
 window_is_fullscreen (GdkWindow *window)
 {
-  GdkWindowImplQuartz *impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
 
 #if MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
-  if (gdk_quartz_osx_version() >= GDK_OSX_LION)
+  if (impl &&
+      gdk_quartz_osx_version() >= GDK_OSX_LION)
     return ([impl->toplevel styleMask] & GDK_QUARTZ_FULLSCREEN_WINDOW) != 0;
   else
 #endif
@@ -2772,10 +2896,11 @@ gdk_quartz_window_fullscreen (GdkWindow *window)
       !WINDOW_IS_TOPLEVEL (window))
     return;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
 
 #if MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
-  if (gdk_quartz_osx_version() >= GDK_OSX_LION)
+  if (gdk_quartz_osx_version() >= GDK_OSX_LION &&
+      impl)
     {
       if (!window_is_fullscreen (window))
         [impl->toplevel toggleFullScreen:nil];
@@ -2784,11 +2909,12 @@ gdk_quartz_window_fullscreen (GdkWindow *window)
     {
 #endif
       FullscreenSavedGeometry *geometry;
-      GdkWindowImplQuartz *impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+      GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
       NSRect frame;
 
       if (GDK_WINDOW_DESTROYED (window) ||
-          !WINDOW_IS_TOPLEVEL (window))
+          !WINDOW_IS_TOPLEVEL (window) ||
+          !impl)
         return;
 
       geometry = get_fullscreen_geometry (window);
@@ -2840,19 +2966,21 @@ gdk_quartz_window_unfullscreen (GdkWindow *window)
 #if MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
   if (gdk_quartz_osx_version() >= GDK_OSX_LION)
     {
-      impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+      impl = gdk_window_get_quartz_impl (window);
 
-      if (window_is_fullscreen (window))
+      if (window_is_fullscreen (window) &&
+          impl)
         [impl->toplevel toggleFullScreen:nil];
     }
   else
     {
 #endif
-      GdkWindowImplQuartz *impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+      GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
       FullscreenSavedGeometry *geometry;
 
       if (GDK_WINDOW_DESTROYED (window) ||
-          !WINDOW_IS_TOPLEVEL (window))
+          !WINDOW_IS_TOPLEVEL (window) ||
+          !impl)
         return;
 
       geometry = get_fullscreen_geometry (window);
@@ -2917,10 +3045,11 @@ static void
 gdk_quartz_window_set_keep_above (GdkWindow *window,
                                   gboolean   setting)
 {
-  GdkWindowImplQuartz *impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
   gint level;
 
   g_return_if_fail (GDK_IS_WINDOW (window));
+  g_return_if_fail (impl);
 
   if (GDK_WINDOW_DESTROYED (window) ||
       !WINDOW_IS_TOPLEVEL (window))
@@ -2936,10 +3065,11 @@ static void
 gdk_quartz_window_set_keep_below (GdkWindow *window,
                                   gboolean   setting)
 {
-  GdkWindowImplQuartz *impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
   gint level;
 
   g_return_if_fail (GDK_IS_WINDOW (window));
+  g_return_if_fail (impl);
 
   if (GDK_WINDOW_DESTROYED (window) ||
       !WINDOW_IS_TOPLEVEL (window))
@@ -2977,10 +3107,11 @@ static void
 gdk_quartz_window_set_opacity (GdkWindow *window,
                                gdouble    opacity)
 {
-  GdkWindowImplQuartz *impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
 
   g_return_if_fail (GDK_IS_WINDOW (window));
   g_return_if_fail (WINDOW_IS_TOPLEVEL (window));
+  g_return_if_fail (impl);
 
   if (GDK_WINDOW_DESTROYED (window) ||
       !WINDOW_IS_TOPLEVEL (window))
@@ -3001,10 +3132,11 @@ gdk_quartz_window_set_shadow_width (GdkWindow *window,
                                     gint       top,
                                     gint       bottom)
 {
-  GdkWindowImplQuartz *impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  GdkWindowImplQuartz *impl = gdk_window_get_quartz_impl (window);
 
   g_return_if_fail (GDK_IS_WINDOW (window));
   g_return_if_fail (WINDOW_IS_TOPLEVEL (window));
+  g_return_if_fail (impl);
 
   if (GDK_WINDOW_DESTROYED (window) ||
       !WINDOW_IS_TOPLEVEL (window))
@@ -3042,9 +3174,10 @@ gdk_quartz_window_get_scale_factor (GdkWindow *window)
   if (GDK_WINDOW_DESTROYED (window))
     return 1;
 
-  impl = GDK_WINDOW_IMPL_QUARTZ (window->impl);
+  impl = gdk_window_get_quartz_impl (window);
 
-  if (impl->toplevel != NULL && gdk_quartz_osx_version() >= GDK_OSX_LION)
+  if (impl && impl->toplevel != NULL &&
+      gdk_quartz_osx_version() >= GDK_OSX_LION)
     return [(id <ScaleFactor>) impl->toplevel backingScaleFactor];
 
   return 1;
@@ -3194,40 +3327,19 @@ gdk_quartz_window_release_context (GdkWindowImplQuartz  *window,
       return;
     }
 
+  g_return_if_fail (cg_context);
   GDK_WINDOW_IMPL_QUARTZ_GET_CLASS (window)->release_context (window, cg_context);
 }
 
+/* macOS doesn't define a root window, but Gdk needs one for two
+ * purposes: To be a parent reference for some toplevels and to be a
+ * fallback window when gdk_window_create_image_surface is called with
+ * a NULL GdkWindow.
+ *
+ */
 
-
-static CGContextRef
-gdk_root_window_impl_quartz_get_context (GdkWindowImplQuartz *window,
-                                         gboolean             antialias)
-{
-  CGColorSpaceRef colorspace;
-  CGContextRef cg_context;
-  GdkWindowImplQuartz *window_impl = GDK_WINDOW_IMPL_QUARTZ (window);
-
-  if (GDK_WINDOW_DESTROYED (window_impl->wrapper))
-    return NULL;
-
-  /* We do not have the notion of a root window on OS X.  We fake this
-   * by creating a 1x1 bitmap and return a context to that.
-   */
-  colorspace = CGColorSpaceCreateWithName (kCGColorSpaceGenericRGB);
-  cg_context = CGBitmapContextCreate (NULL,
-                                      1, 1, 8, 4, colorspace,
-                                      (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
-  CGColorSpaceRelease (colorspace);
-
-  return cg_context;
-}
-
-static void
-gdk_root_window_impl_quartz_release_context (GdkWindowImplQuartz *window,
-                                             CGContextRef         cg_context)
-{
-  CGContextRelease (cg_context);
-}
+static CGContextRef gdk_root_window_impl_quartz_get_context (GdkWindowImplQuartz *window, gboolean antialias);
+static void gdk_root_window_impl_quartz_release_context (GdkWindowImplQuartz *window, CGContextRef cg_context);
 
 static void
 gdk_root_window_impl_quartz_class_init (GdkRootWindowImplQuartzClass *klass)
@@ -3243,6 +3355,22 @@ gdk_root_window_impl_quartz_class_init (GdkRootWindowImplQuartzClass *klass)
 static void
 gdk_root_window_impl_quartz_init (GdkRootWindowImplQuartz *impl)
 {
+  CGColorSpaceRef colorspace =  CGColorSpaceCreateDeviceRGB ();
+  /* Alpha channel Info: Cairo, CGImage, and CVPixelBuffer all use
+   * kCGImageAlphaPremultipliedFirst, CALayer.contents wants
+   * kCGImageAlphaPremultipliedLast.
+   */
+  CGBitmapInfo info = (CGBitmapInfo)kCGImageAlphaPremultipliedLast;
+  impl->cg_context = CGBitmapContextCreate (NULL, 1, 1, 8, 4,
+                                            colorspace, info);
+  CGColorSpaceRelease (colorspace);
+  impl->cg_layers = NULL;
+}
+
+static void
+gdk_root_window_impl_quartz_dispose (GdkRootWindowImplQuartz *impl)
+{
+  g_list_free_full (impl->cg_layers, (GDestroyNotify)CGLayerRelease);
 }
 
 GType
@@ -3271,4 +3399,30 @@ _gdk_root_window_impl_quartz_get_type (void)
     }
 
   return object_type;
+}
+
+
+static CGContextRef
+gdk_root_window_impl_quartz_get_context (GdkWindowImplQuartz *window_impl,
+                                         gboolean             antialias)
+{
+   GdkRootWindowImplQuartz *impl = GDK_ROOT_WINDOW_IMPL_QUARTZ (window_impl);
+   CGSize size;
+   CGLayerRef layer;
+
+  if (!window_impl || GDK_WINDOW_DESTROYED (window_impl->wrapper))
+    return NULL;
+
+  size.width = gdk_window_get_width (window_impl->wrapper);
+  size.height = gdk_window_get_height (window_impl->wrapper);
+  layer = CGLayerCreateWithContext(impl->cg_context, size, NULL);
+  impl->cg_layers = g_list_prepend(impl->cg_layers, CGLayerRetain (layer));
+  return CGContextRetain (CGLayerGetContext (layer));
+}
+
+static void
+gdk_root_window_impl_quartz_release_context (GdkWindowImplQuartz *window,
+                                             CGContextRef         cg_context)
+{
+  CGContextRelease (cg_context);
 }

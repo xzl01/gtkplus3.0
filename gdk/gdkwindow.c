@@ -1286,7 +1286,7 @@ get_native_device_event_mask (GdkWindow *private,
       if (gdk_window_is_toplevel (private) ||
           mask & GDK_BUTTON_PRESS_MASK)
         mask |=
-          GDK_TOUCH_MASK |
+          GDK_TOUCH_MASK | GDK_TOUCHPAD_GESTURE_MASK |
           GDK_POINTER_MOTION_MASK |
           GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK |
           GDK_SCROLL_MASK;
@@ -11995,6 +11995,23 @@ gdk_window_show_window_menu (GdkWindow *window,
 
   if (impl_class->show_window_menu)
     return impl_class->show_window_menu (window, event);
+  else
+    return FALSE;
+}
+
+gboolean
+gdk_window_titlebar_gesture (GdkWindow          *window,
+                             GdkTitlebarGesture  gesture)
+{
+  GdkWindowImplClass *impl_class;
+
+  g_return_val_if_fail (GDK_IS_WINDOW (window), FALSE);
+  g_return_val_if_fail (!GDK_WINDOW_DESTROYED (window), FALSE);
+
+  impl_class = GDK_WINDOW_IMPL_GET_CLASS (window->impl);
+
+  if (impl_class->titlebar_gesture)
+    return impl_class->titlebar_gesture (window, gesture);
   else
     return FALSE;
 }

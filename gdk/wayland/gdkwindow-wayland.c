@@ -753,12 +753,23 @@ window_update_scale (GdkWindow *window)
       return;
     }
 
-  scale = 1;
-  for (l = impl->display_server.outputs; l != NULL; l = l->next)
+  if (!impl->display_server.outputs)
     {
-      guint32 output_scale =
-        _gdk_wayland_screen_get_output_scale (display_wayland->screen, l->data);
-      scale = MAX (scale, output_scale);
+      scale = impl->scale;
+    }
+  else
+    {
+      scale = 1;
+      for (l = impl->display_server.outputs; l != NULL; l = l->next)
+        {
+          struct wl_output *output = l->data;
+          uint32_t output_scale;
+
+          output_scale =
+            _gdk_wayland_screen_get_output_scale (display_wayland->screen,
+                                                  output);
+          scale = MAX (scale, output_scale);
+        }
     }
 
   /* Notify app that scale changed */
@@ -1199,6 +1210,7 @@ gdk_wayland_window_maybe_configure (GdkWindow *window,
   GdkWindowImplWayland *impl = GDK_WINDOW_IMPL_WAYLAND (window->impl);
   gboolean is_xdg_popup;
   gboolean is_visible;
+  gboolean size_changed;
 
   impl->unconfigured_width = calculate_width_without_margin (window, width);
   impl->unconfigured_height = calculate_height_without_margin (window, height);
@@ -1206,9 +1218,8 @@ gdk_wayland_window_maybe_configure (GdkWindow *window,
   if (should_inhibit_resize (window))
     return;
 
-  if (window->width == width &&
-      window->height == height &&
-      impl->scale == scale)
+  size_changed = (window->width != width || window->height != height);
+  if (!size_changed && impl->scale == scale)
     return;
 
   /* For xdg_popup using an xdg_positioner, there is a race condition if
@@ -1222,6 +1233,7 @@ gdk_wayland_window_maybe_configure (GdkWindow *window,
 
   if (is_xdg_popup &&
       is_visible &&
+      size_changed &&
       !impl->initial_configure_received &&
       !impl->configuring_popup)
     gdk_window_hide (window);
@@ -1230,6 +1242,7 @@ gdk_wayland_window_maybe_configure (GdkWindow *window,
 
   if (is_xdg_popup &&
       is_visible &&
+      size_changed &&
       !impl->initial_configure_received &&
       !impl->configuring_popup)
     gdk_window_show (window);
@@ -1520,6 +1533,14 @@ surface_enter (void              *data,
 {
   GdkWindow *window = GDK_WINDOW (data);
   GdkWindowImplWayland *impl = GDK_WINDOW_IMPL_WAYLAND (window->impl);
+  GdkWaylandDisplay *display_wayland =
+    GDK_WAYLAND_DISPLAY (gdk_window_get_display (window));
+  gboolean output_is_unmanaged;
+
+  output_is_unmanaged =
+    _gdk_wayland_screen_get_output_scale (display_wayland->screen, output) == 0;
+  if (output_is_unmanaged)
+    return;
 
   GDK_NOTE (EVENTS,
             g_message ("surface enter, window %p output %p", window, output));
@@ -1985,6 +2006,13 @@ create_zxdg_toplevel_v6_resources (GdkWindow *window)
                                  window);
 }
 
+/**
+ * gdk_wayland_window_set_application_id:
+ * @window:
+ * @application_id:
+ *
+ * Since: 3.24.22
+ */
 void
 gdk_wayland_window_set_application_id (GdkWindow *window, const char* application_id)
 {
@@ -3330,6 +3358,12 @@ gdk_wayland_window_hide_surface (GdkWindow *window)
           impl->display_server.xdg_popup = NULL;
           display_wayland->current_popups =
             g_list_remove (display_wayland->current_popups, window);
+
+          if (impl->position_method == POSITION_METHOD_MOVE_TO_RECT)
+            {
+              window->x = 0;
+              window->y = 0;
+            }
         }
       if (impl->display_server.xdg_surface)
         {
@@ -3352,6 +3386,12 @@ gdk_wayland_window_hide_surface (GdkWindow *window)
           impl->display_server.zxdg_popup_v6 = NULL;
           display_wayland->current_popups =
             g_list_remove (display_wayland->current_popups, window);
+
+          if (impl->position_method == POSITION_METHOD_MOVE_TO_RECT)
+            {
+              window->x = 0;
+              window->y = 0;
+            }
         }
       if (impl->display_server.zxdg_surface_v6)
         {
@@ -3771,29 +3811,91 @@ gdk_wayland_window_get_input_shape (GdkWindow *window)
   return NULL;
 }
 
+#ifdef HAVE_XDG_ACTIVATION
+static void
+token_done (gpointer                        data,
+            struct xdg_activation_token_v1 *provider,
+            const char                     *token)
+{
+  char **token_out = data;
+
+  *token_out = g_strdup (token);
+}
+
+static const struct xdg_activation_token_v1_listener token_listener = {
+  token_done,
+};
+#endif
+
 static void
 gdk_wayland_window_focus (GdkWindow *window,
                           guint32    timestamp)
 {
   GdkWindowImplWayland *impl = GDK_WINDOW_IMPL_WAYLAND (window->impl);
+  GdkDisplay *display = gdk_window_get_display (window);
+  GdkWaylandDisplay *display_wayland = GDK_WAYLAND_DISPLAY (display);
+  gchar *startup_id = NULL;
 
-  if (!impl->display_server.gtk_surface)
-    return;
+  startup_id = g_steal_pointer (&display_wayland->startup_notification_id);
 
-  if (timestamp == GDK_CURRENT_TIME)
+#ifdef HAVE_XDG_ACTIVATION
+  if (display_wayland->xdg_activation)
     {
-      GdkWaylandDisplay *display_wayland =
-        GDK_WAYLAND_DISPLAY (gdk_window_get_display (window));
+      GdkSeat *seat = gdk_display_get_default_seat (display);
 
-      if (display_wayland->gtk_shell_version >= 3)
+      /* If the focus request does not have a startup ID associated, get a
+       * new token to activate the window.
+       */
+      if (!startup_id)
         {
-          gtk_surface1_request_focus (impl->display_server.gtk_surface,
-                                      display_wayland->startup_notification_id);
-          g_clear_pointer (&display_wayland->startup_notification_id, g_free);
+          struct xdg_activation_token_v1 *token;
+          struct wl_event_queue *event_queue;
+          struct wl_surface *wl_surface = NULL;
+          GdkWindow *focus_window;
+
+          event_queue = wl_display_create_queue (display_wayland->wl_display);
+
+          token = xdg_activation_v1_get_activation_token (display_wayland->xdg_activation);
+          wl_proxy_set_queue ((struct wl_proxy *) token, event_queue);
+
+          xdg_activation_token_v1_add_listener (token,
+                                                &token_listener,
+                                                &startup_id);
+          xdg_activation_token_v1_set_serial (token,
+                                              _gdk_wayland_seat_get_last_implicit_grab_serial (seat, NULL),
+                                              gdk_wayland_seat_get_wl_seat (seat));
+
+          focus_window = gdk_wayland_device_get_focus (gdk_seat_get_keyboard (seat));
+          if (focus_window)
+            wl_surface = gdk_wayland_window_get_wl_surface (focus_window);
+          if (wl_surface)
+            xdg_activation_token_v1_set_surface (token, wl_surface);
+
+          xdg_activation_token_v1_commit (token);
+
+          while (startup_id == NULL)
+            wl_display_dispatch_queue (display_wayland->wl_display, event_queue);
+
+          xdg_activation_token_v1_destroy (token);
+          wl_event_queue_destroy (event_queue);
         }
+
+      xdg_activation_v1_activate (display_wayland->xdg_activation,
+                                  startup_id,
+                                  impl->display_server.wl_surface);
     }
   else
-    gtk_surface1_present (impl->display_server.gtk_surface, timestamp);
+#endif
+  if (impl->display_server.gtk_surface)
+    {
+      if (timestamp != GDK_CURRENT_TIME)
+        gtk_surface1_present (impl->display_server.gtk_surface, timestamp);
+      else if (startup_id && display_wayland->gtk_shell_version >= 3)
+        gtk_surface1_request_focus (impl->display_server.gtk_surface,
+                                    startup_id);
+    }
+
+  g_free (startup_id);
 }
 
 static void
@@ -4065,6 +4167,27 @@ static void
 gdk_wayland_window_set_startup_id (GdkWindow   *window,
                                    const gchar *startup_id)
 {
+  GdkWindowImplWayland *impl = GDK_WINDOW_IMPL_WAYLAND (window->impl);
+  GdkDisplay *display = gdk_window_get_display (window);
+  GdkWaylandDisplay *display_wayland = GDK_WAYLAND_DISPLAY (display);
+  gchar *free_me = NULL;
+
+  if (!startup_id)
+    {
+      free_me = g_steal_pointer (&display_wayland->startup_notification_id);
+      startup_id = free_me;
+    }
+
+#ifdef HAVE_XDG_ACTIVATION
+  if (startup_id)
+    {
+      xdg_activation_v1_activate (display_wayland->xdg_activation,
+                                  startup_id,
+				  impl->display_server.wl_surface);
+    }
+#endif
+
+  g_free (free_me);
 }
 
 static gboolean
@@ -4755,6 +4878,65 @@ gdk_wayland_window_show_window_menu (GdkWindow *window,
   return TRUE;
 }
 
+static gboolean
+translate_gesture (GdkTitlebarGesture         gesture,
+                   enum gtk_surface1_gesture *out_gesture)
+{
+  switch (gesture)
+    {
+    case GDK_TITLEBAR_GESTURE_DOUBLE_CLICK:
+      *out_gesture = GTK_SURFACE1_GESTURE_DOUBLE_CLICK;
+      break;
+
+    case GDK_TITLEBAR_GESTURE_RIGHT_CLICK:
+      *out_gesture = GTK_SURFACE1_GESTURE_RIGHT_CLICK;
+      break;
+
+    case GDK_TITLEBAR_GESTURE_MIDDLE_CLICK:
+      *out_gesture = GTK_SURFACE1_GESTURE_MIDDLE_CLICK;
+      break;
+
+    default:
+      g_warning ("Not handling unknown titlebar gesture %u", gesture);
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
+static gboolean
+gdk_wayland_window_titlebar_gesture (GdkWindow          *window,
+                                     GdkTitlebarGesture  gesture)
+{
+  GdkWindowImplWayland *impl = GDK_WINDOW_IMPL_WAYLAND (window->impl);
+  struct gtk_surface1 *gtk_surface = impl->display_server.gtk_surface;
+  enum gtk_surface1_gesture gtk_gesture;
+  GdkSeat *seat;
+  struct wl_seat *wl_seat;
+  uint32_t serial;
+
+  if (!gtk_surface)
+    return FALSE;
+
+  if (gtk_surface1_get_version (gtk_surface) < GTK_SURFACE1_TITLEBAR_GESTURE_SINCE_VERSION)
+    return FALSE;
+
+  if (!translate_gesture (gesture, &gtk_gesture))
+    return FALSE;
+
+  seat = gdk_display_get_default_seat (gdk_window_get_display (window));
+  wl_seat = gdk_wayland_seat_get_wl_seat (seat);
+
+  serial = _gdk_wayland_seat_get_last_implicit_grab_serial (seat, NULL);
+
+  gtk_surface1_titlebar_gesture (impl->display_server.gtk_surface,
+                                 serial,
+                                 wl_seat,
+                                 gtk_gesture);
+
+  return TRUE;
+}
+
 static void
 _gdk_window_impl_wayland_class_init (GdkWindowImplWaylandClass *klass)
 {
@@ -4846,6 +5028,7 @@ _gdk_window_impl_wayland_class_init (GdkWindowImplWaylandClass *klass)
   impl_class->show_window_menu = gdk_wayland_window_show_window_menu;
   impl_class->create_gl_context = gdk_wayland_window_create_gl_context;
   impl_class->invalidate_for_new_frame = gdk_wayland_window_invalidate_for_new_frame;
+  impl_class->titlebar_gesture = gdk_wayland_window_titlebar_gesture;
 
   signals[COMMITTED] = g_signal_new ("committed",
                                      G_TYPE_FROM_CLASS (object_class),

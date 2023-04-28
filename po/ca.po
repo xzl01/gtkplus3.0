@@ -32,11 +32,11 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: gtk+ 2.8.2\n"
+"Project-Id-Version: gtk+ 3.2.4\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2021-05-27 02:52+0000\n"
-"PO-Revision-Date: 2019-08-31 22:51+0200\n"
-"Last-Translator: Robert Antoni Buj Gelonch <rbuj@fedoraproject.org>\n"
+"POT-Creation-Date: 2022-11-22 18:41+0000\n"
+"PO-Revision-Date: 2022-11-23 20:44+0200\n"
+"Last-Translator: Jordi Mas i Hernàndez <jmas@softcatala.org>\n"
 "Language-Team: Catalan <tradgnome@softcatala.org>\n"
 "Language: ca\n"
 "MIME-Version: 1.0\n"
@@ -493,64 +493,34 @@ msgstr "Desperta"
 #: gdk/keyname-table.h:6916
 msgctxt "keyboard label"
 msgid "Suspend"
-msgstr "Atura temporalment"
+msgstr "Suspèn"
 
 #: gdk/quartz/gdkglcontext-quartz.c:123
 msgid "Unable to create a GL pixel format"
 msgstr "No s'ha pogut crear el format píxel GL"
 
 #: gdk/quartz/gdkglcontext-quartz.c:133 gdk/wayland/gdkglcontext-wayland.c:208
-#: gdk/win32/gdkglcontext-win32.c:1100 gdk/win32/gdkglcontext-win32.c:1140
+#: gdk/win32/gdkglcontext-win32.c:808 gdk/win32/gdkglcontext-win32.c:1258
 #: gdk/x11/gdkglcontext-x11.c:724 gdk/x11/gdkglcontext-x11.c:774
 msgid "Unable to create a GL context"
 msgstr "No s'ha pogut crear el context GL"
 
-#: gdk/wayland/gdkglcontext-wayland.c:418
-#: gdk/wayland/gdkglcontext-wayland.c:428 gdk/win32/gdkglcontext-win32.c:938
-#: gdk/win32/gdkglcontext-win32.c:948 gdk/win32/gdkglcontext-win32.c:1065
+#: gdk/wayland/gdkglcontext-wayland.c:422
+#: gdk/wayland/gdkglcontext-wayland.c:432 gdk/win32/gdkglcontext-win32.c:777
+#: gdk/win32/gdkglcontext-win32.c:1136 gdk/win32/gdkglcontext-win32.c:1146
 #: gdk/x11/gdkglcontext-x11.c:975
 msgid "No available configurations for the given pixel format"
 msgstr ""
 "No hi ha cap configuració disponible pel tipus de format de píxel donat"
 
-#: gdk/wayland/gdkglcontext-wayland.c:468 gdk/win32/gdkglcontext-win32.c:1207
+#: gdk/wayland/gdkglcontext-wayland.c:472 gdk/win32/gdkglcontext-win32.c:1491
 #: gdk/x11/gdkglcontext-x11.c:1281
 msgid "No GL implementation is available"
 msgstr "No hi ha cap implementació GL disponible"
 
-#: gdk/wayland/gdkglcontext-wayland.c:476
+#: gdk/wayland/gdkglcontext-wayland.c:480
 msgid "Core GL is not available on EGL implementation"
 msgstr "El nucli GL no es troba disponible en la implementació EGL"
-
-#. Description of --sync in --help output
-#: gdk/win32/gdkmain-win32.c:56
-msgid "Don't batch GDI requests"
-msgstr "No processis en lot les sol·licituds del GDI"
-
-#. Description of --no-wintab in --help output
-#: gdk/win32/gdkmain-win32.c:58
-msgid "Don't use the Wintab API for tablet support"
-msgstr "No utilitzis l'API Wintab per al suport de tauleta gràfica"
-
-#. Description of --ignore-wintab in --help output
-#: gdk/win32/gdkmain-win32.c:60
-msgid "Same as --no-wintab"
-msgstr "El mateix que --no-wintab"
-
-#. Description of --use-wintab in --help output
-#: gdk/win32/gdkmain-win32.c:62
-msgid "Do use the Wintab API [default]"
-msgstr "Utilitza l'API Wintab [per defecte]"
-
-#. Description of --max-colors=COLORS in --help output
-#: gdk/win32/gdkmain-win32.c:64
-msgid "Size of the palette in 8 bit mode"
-msgstr "Mida de la paleta al mode 8 bits"
-
-#. Placeholder in --max-colors=COLORS in --help output
-#: gdk/win32/gdkmain-win32.c:65
-msgid "COLORS"
-msgstr "COLORS"
 
 #: gdk/x11/gdkapplaunchcontext-x11.c:298
 #, c-format
@@ -715,17 +685,17 @@ msgid "_Close"
 msgstr "_Tanca"
 
 #: gtk/a11y/gtkimageaccessible.c:59 gtk/gtkheaderbar.c:415
-#: gtk/gtkwindow.c:9319
+#: gtk/gtkwindow.c:9345
 msgid "Minimize"
 msgstr "Minimitza"
 
 #: gtk/a11y/gtkimageaccessible.c:60 gtk/gtkheaderbar.c:439
-#: gtk/gtkwindow.c:9328
+#: gtk/gtkwindow.c:9354
 msgid "Maximize"
 msgstr "Maximitza"
 
 #: gtk/a11y/gtkimageaccessible.c:61 gtk/gtkheaderbar.c:439
-#: gtk/gtkwindow.c:9285
+#: gtk/gtkwindow.c:9311
 msgid "Restore"
 msgstr "Restaura"
 
@@ -1277,7 +1247,7 @@ msgstr ""
 #: gtk/gtkmountoperation.c:594 gtk/gtkpagesetupunixdialog.c:197
 #: gtk/gtkprintbackend.c:779 gtk/gtkprinteroptionwidget.c:545
 #: gtk/gtkprintunixdialog.c:674 gtk/gtkprintunixdialog.c:747
-#: gtk/gtkwindow.c:12789 gtk/inspector/css-editor.c:201
+#: gtk/gtkwindow.c:12815 gtk/inspector/css-editor.c:201
 #: gtk/ui/gtkappchooserdialog.ui:61 gtk/ui/gtkassistant.ui:125
 #: gtk/ui/gtkcolorchooserdialog.ui:34 gtk/ui/gtkfontchooserdialog.ui:31
 msgid "_Cancel"
@@ -1326,7 +1296,7 @@ msgid "_Apply"
 msgstr "_Aplica"
 
 #: gtk/deprecated/gtkfontsel.c:1698 gtk/gtkmessagedialog.c:944
-#: gtk/gtkmessagedialog.c:966 gtk/gtkprintbackend.c:780 gtk/gtkwindow.c:12790
+#: gtk/gtkmessagedialog.c:966 gtk/gtkprintbackend.c:780 gtk/gtkwindow.c:12816
 msgid "_OK"
 msgstr "_D'acord"
 
@@ -1680,12 +1650,20 @@ msgctxt "keyboard label"
 msgid "Meta"
 msgstr "Meta"
 
-#: gtk/gtkaccellabel.c:889
+#. Translators: "KP" means "numeric key pad". This string will
+#. * be used in accelerators such as "Ctrl+Shift+KP 1" in menus,
+#. * and therefore the translation needs to be very short.
+#: gtk/gtkaccellabel.c:893
+msgctxt "keyboard label"
+msgid "KP"
+msgstr "KP"
+
+#: gtk/gtkaccellabel.c:900
 msgctxt "keyboard label"
 msgid "Space"
 msgstr "Espai"
 
-#: gtk/gtkaccellabel.c:892 gtk/gtkshortcutlabel.c:181
+#: gtk/gtkaccellabel.c:903 gtk/gtkshortcutlabel.c:181
 msgctxt "keyboard label"
 msgid "Backslash"
 msgstr "Barra inversa"
@@ -1751,7 +1729,7 @@ msgid "Other Applications"
 msgstr "Altres aplicacions"
 
 #: gtk/gtkapplicationwindow.c:345 gtk/gtkprintoperation-unix.c:485
-#: gtk/gtkprintoperation-win32.c:1521 gtk/inspector/prop-editor.c:1686
+#: gtk/gtkprintoperation-win32.c:1589 gtk/inspector/prop-editor.c:1686
 msgid "Application"
 msgstr "Aplicació"
 
@@ -1938,7 +1916,7 @@ msgstr "No vàlid"
 msgid "New accelerator…"
 msgstr "Accelerador nou…"
 
-#: gtk/gtkcellrendererprogress.c:377 gtk/gtkcellrendererprogress.c:470
+#: gtk/gtkcellrendererprogress.c:377 gtk/gtkcellrendererprogress.c:481
 #, c-format
 msgctxt "progress bar label"
 msgid "%d %%"
@@ -2289,52 +2267,52 @@ msgstr "_Dret:"
 msgid "Paper Margins"
 msgstr "Marges del paper"
 
-#: gtk/gtkentry.c:9591 gtk/gtklabel.c:6686 gtk/gtktextview.c:9520
+#: gtk/gtkentry.c:9596 gtk/gtklabel.c:6687 gtk/gtktextview.c:9528
 msgid "Cu_t"
 msgstr "Re_talla"
 
-#: gtk/gtkentry.c:9595 gtk/gtklabel.c:6687 gtk/gtktextview.c:9524
+#: gtk/gtkentry.c:9600 gtk/gtklabel.c:6688 gtk/gtktextview.c:9532
 msgid "_Copy"
 msgstr "_Copia"
 
-#: gtk/gtkentry.c:9599 gtk/gtklabel.c:6688 gtk/gtktextview.c:9526
+#: gtk/gtkentry.c:9604 gtk/gtklabel.c:6689 gtk/gtktextview.c:9534
 msgid "_Paste"
 msgstr "_Enganxa"
 
-#: gtk/gtkentry.c:9602 gtk/gtkfilechooserwidget.c:1500
-#: gtk/gtkfilechooserwidget.c:2335 gtk/gtklabel.c:6690 gtk/gtktextview.c:9529
+#: gtk/gtkentry.c:9607 gtk/gtkfilechooserwidget.c:1500
+#: gtk/gtkfilechooserwidget.c:2335 gtk/gtklabel.c:6691 gtk/gtktextview.c:9537
 msgid "_Delete"
 msgstr "_Suprimeix"
 
-#: gtk/gtkentry.c:9613 gtk/gtklabel.c:6699 gtk/gtktextview.c:9543
+#: gtk/gtkentry.c:9618 gtk/gtklabel.c:6700 gtk/gtktextview.c:9551
 msgid "Select _All"
 msgstr "Seleccion_a-ho tot"
 
-#: gtk/gtkentry.c:9623 gtk/gtktextview.c:9553
+#: gtk/gtkentry.c:9628 gtk/gtktextview.c:9561
 msgid "Insert _Emoji"
 msgstr "_Insereix un emoji"
 
-#: gtk/gtkentry.c:9799 gtk/gtktextview.c:9777
+#: gtk/gtkentry.c:9804 gtk/gtktextview.c:9785
 msgid "Select all"
 msgstr "Selecciona-ho tot"
 
-#: gtk/gtkentry.c:9802 gtk/gtktextview.c:9780
+#: gtk/gtkentry.c:9807 gtk/gtktextview.c:9788
 msgid "Cut"
 msgstr "Retalla"
 
-#: gtk/gtkentry.c:9805 gtk/gtktextview.c:9783
+#: gtk/gtkentry.c:9810 gtk/gtktextview.c:9791
 msgid "Copy"
 msgstr "Copia"
 
-#: gtk/gtkentry.c:9808 gtk/gtktextview.c:9786
+#: gtk/gtkentry.c:9813 gtk/gtktextview.c:9794
 msgid "Paste"
 msgstr "Enganxa"
 
-#: gtk/gtkentry.c:10880
+#: gtk/gtkentry.c:10885
 msgid "Caps Lock is on"
 msgstr "La fixació de majúscules està activada"
 
-#: gtk/gtkentry.c:11158
+#: gtk/gtkentry.c:11163
 msgid "Insert Emoji"
 msgstr "Insereix un emoji"
 
@@ -2342,7 +2320,7 @@ msgstr "Insereix un emoji"
 msgid "Select a File"
 msgstr "Seleccioneu un fitxer"
 
-#: gtk/gtkfilechooserbutton.c:113 gtk/gtkplacessidebar.c:1109
+#: gtk/gtkfilechooserbutton.c:113 gtk/gtkplacessidebar.c:1112
 msgid "Desktop"
 msgstr "Escriptori"
 
@@ -2360,7 +2338,7 @@ msgstr "_Nom"
 
 #. Open item is always present
 #: gtk/gtkfilechoosernative.c:546 gtk/gtkfilechoosernative.c:631
-#: gtk/gtkplacessidebar.c:3625 gtk/gtkplacessidebar.c:3693
+#: gtk/gtkplacessidebar.c:3628 gtk/gtkplacessidebar.c:3696
 #: gtk/gtkplacesview.c:1705
 msgid "_Open"
 msgstr "_Obre"
@@ -2536,10 +2514,10 @@ msgstr "_Copia la ubicació"
 msgid "_Add to Bookmarks"
 msgstr "_Afegeix a les adreces d'interès"
 
-#: gtk/gtkfilechooserwidget.c:2334 gtk/gtkplacessidebar.c:2741
+#: gtk/gtkfilechooserwidget.c:2334 gtk/gtkplacessidebar.c:2744
 #: gtk/ui/gtkfilechooserwidget.ui:569
 msgid "_Rename"
-msgstr "Canvia el _nom…"
+msgstr "Canvia el _nom"
 
 #: gtk/gtkfilechooserwidget.c:2336
 msgid "_Move to Trash"
@@ -2680,15 +2658,12 @@ msgstr "Presentació"
 msgid "Spreadsheet"
 msgstr "Full de càlcul"
 
-#. Translators: We don't know whether this printer is
-#. * available to print to.
 #: gtk/gtkfilechooserwidget.c:5055 gtk/gtkfilechooserwidget.c:5244
 #: gtk/inspector/prop-editor.c:1689
-#: modules/printbackends/cloudprint/gtkprintbackendcloudprint.c:748
 msgid "Unknown"
 msgstr "Desconegut"
 
-#: gtk/gtkfilechooserwidget.c:5283 gtk/gtkplacessidebar.c:1094
+#: gtk/gtkfilechooserwidget.c:5283 gtk/gtkplacessidebar.c:1097
 msgid "Home"
 msgstr "Carpeta de l'usuari"
 
@@ -2751,51 +2726,51 @@ msgctxt "font"
 msgid "None"
 msgstr "Cap"
 
-#: gtk/gtkfontchooserwidget.c:1556
+#: gtk/gtkfontchooserwidget.c:1604
 msgid "Width"
 msgstr "Amplada"
 
-#: gtk/gtkfontchooserwidget.c:1557
+#: gtk/gtkfontchooserwidget.c:1605
 msgid "Weight"
 msgstr "Pes"
 
-#: gtk/gtkfontchooserwidget.c:1558
+#: gtk/gtkfontchooserwidget.c:1606
 msgid "Italic"
 msgstr "Cursiva"
 
-#: gtk/gtkfontchooserwidget.c:1559
+#: gtk/gtkfontchooserwidget.c:1607
 msgid "Slant"
 msgstr "Inclina"
 
-#: gtk/gtkfontchooserwidget.c:1560
+#: gtk/gtkfontchooserwidget.c:1608
 msgid "Optical Size"
 msgstr "Mida òptica"
 
-#: gtk/gtkfontchooserwidget.c:2097 gtk/inspector/prop-editor.c:1676
+#: gtk/gtkfontchooserwidget.c:2308 gtk/inspector/prop-editor.c:1676
 msgid "Default"
 msgstr "Per defecte"
 
-#: gtk/gtkfontchooserwidget.c:2144
+#: gtk/gtkfontchooserwidget.c:2355
 msgid "Ligatures"
 msgstr "Lligadures"
 
-#: gtk/gtkfontchooserwidget.c:2145
+#: gtk/gtkfontchooserwidget.c:2356
 msgid "Letter Case"
-msgstr "Ignora les diferències entre majúscules i minúscules"
+msgstr "Majúscules i minúscules"
 
-#: gtk/gtkfontchooserwidget.c:2146
+#: gtk/gtkfontchooserwidget.c:2357
 msgid "Number Case"
-msgstr "Número de cas"
+msgstr "Mida del número"
 
-#: gtk/gtkfontchooserwidget.c:2147
+#: gtk/gtkfontchooserwidget.c:2358
 msgid "Number Spacing"
-msgstr "Espaiat dels nombres"
+msgstr "Espaiat entre números"
 
-#: gtk/gtkfontchooserwidget.c:2148
+#: gtk/gtkfontchooserwidget.c:2359
 msgid "Number Formatting"
 msgstr "Formatació dels nombres"
 
-#: gtk/gtkfontchooserwidget.c:2149
+#: gtk/gtkfontchooserwidget.c:2360
 msgid "Character Variants"
 msgstr "Variants del caràcter"
 
@@ -2807,7 +2782,7 @@ msgstr "S'ha produït un error en la creació del context OpenGL"
 msgid "Application menu"
 msgstr "Menú d'aplicacions"
 
-#: gtk/gtkheaderbar.c:458 gtk/gtkwindow.c:9355
+#: gtk/gtkheaderbar.c:458 gtk/gtkwindow.c:9381
 msgid "Close"
 msgstr "Tanca"
 
@@ -2858,12 +2833,12 @@ msgid "Error"
 msgstr "Error"
 
 #. Open Link
-#: gtk/gtklabel.c:6667
+#: gtk/gtklabel.c:6668
 msgid "_Open Link"
 msgstr "Obre l'_enllaç"
 
 #. Copy Link Address
-#: gtk/gtklabel.c:6676
+#: gtk/gtklabel.c:6677
 msgid "Copy _Link Address"
 msgstr "Copia l'adreça de l'en_llaç"
 
@@ -3122,7 +3097,7 @@ msgstr "Intèrpret d'ordres «Z»"
 msgid "Cannot end process with PID %d: %s"
 msgstr "No es pot finalitzar el procés amb el PID %d: %s"
 
-#: gtk/gtknotebook.c:5150 gtk/gtknotebook.c:7428
+#: gtk/gtknotebook.c:5151 gtk/gtknotebook.c:7429
 #, c-format
 msgid "Page %u"
 msgstr "Pàgina %u"
@@ -3168,218 +3143,218 @@ msgid "File System Root"
 msgstr "Arrel del sistema de fitxers"
 
 #. translators: %s is the name of a cloud provider for files
-#: gtk/gtkplacessidebar.c:981
+#: gtk/gtkplacessidebar.c:984
 #, c-format
 msgid "Open %s"
 msgstr "Obre %s"
 
-#: gtk/gtkplacessidebar.c:1070 gtk/ui/gtkemojichooser.ui:197
+#: gtk/gtkplacessidebar.c:1073 gtk/ui/gtkemojichooser.ui:197
 msgid "Recent"
 msgstr "Utilitzats recentment"
 
-#: gtk/gtkplacessidebar.c:1072
+#: gtk/gtkplacessidebar.c:1075
 msgid "Recent files"
 msgstr "Fitxers utilitzats recentment"
 
-#: gtk/gtkplacessidebar.c:1082
+#: gtk/gtkplacessidebar.c:1085
 msgid "Starred"
 msgstr "Destacat"
 
 #. TODO: Rename to 'Starred files'
-#: gtk/gtkplacessidebar.c:1085
+#: gtk/gtkplacessidebar.c:1088
 msgid "Favorite files"
 msgstr "Fitxers preferits"
 
-#: gtk/gtkplacessidebar.c:1096
+#: gtk/gtkplacessidebar.c:1099
 msgid "Open your personal folder"
 msgstr "Obriu la vostra carpeta personal"
 
-#: gtk/gtkplacessidebar.c:1111
+#: gtk/gtkplacessidebar.c:1114
 msgid "Open the contents of your desktop in a folder"
 msgstr "Obriu el contingut de l'escriptori en una carpeta"
 
-#: gtk/gtkplacessidebar.c:1125
+#: gtk/gtkplacessidebar.c:1128
 msgid "Enter Location"
 msgstr "Introduïu una ubicació"
 
-#: gtk/gtkplacessidebar.c:1127
+#: gtk/gtkplacessidebar.c:1130
 msgid "Manually enter a location"
 msgstr "Introduïu manualment una ubicació"
 
-#: gtk/gtkplacessidebar.c:1137
+#: gtk/gtkplacessidebar.c:1140
 msgid "Trash"
 msgstr "Paperera"
 
-#: gtk/gtkplacessidebar.c:1139
+#: gtk/gtkplacessidebar.c:1142
 msgid "Open the trash"
 msgstr "Obre la paperera"
 
-#: gtk/gtkplacessidebar.c:1248 gtk/gtkplacessidebar.c:1276
-#: gtk/gtkplacessidebar.c:1491
+#: gtk/gtkplacessidebar.c:1251 gtk/gtkplacessidebar.c:1279
+#: gtk/gtkplacessidebar.c:1494
 #, c-format
 msgid "Mount and open “%s”"
 msgstr "Munta i obre «%s»"
 
-#: gtk/gtkplacessidebar.c:1371
+#: gtk/gtkplacessidebar.c:1374
 msgid "Open the contents of the file system"
 msgstr "Obre el contingut del sistema de fitxers"
 
-#: gtk/gtkplacessidebar.c:1455
+#: gtk/gtkplacessidebar.c:1458
 msgid "New bookmark"
 msgstr "Adreça d'interès nova"
 
-#: gtk/gtkplacessidebar.c:1457
+#: gtk/gtkplacessidebar.c:1460
 msgid "Add a new bookmark"
 msgstr "Afegeix una adreça d'interès nova"
 
-#: gtk/gtkplacessidebar.c:1470
+#: gtk/gtkplacessidebar.c:1473
 msgid "Connect to Server"
 msgstr "Connecta a un servidor"
 
-#: gtk/gtkplacessidebar.c:1472
+#: gtk/gtkplacessidebar.c:1475
 msgid "Connect to a network server address"
 msgstr "Connecta a l'adreça d'un servidor de xarxa"
 
-#: gtk/gtkplacessidebar.c:1534
+#: gtk/gtkplacessidebar.c:1537
 msgid "Other Locations"
 msgstr "Altres ubicacions"
 
-#: gtk/gtkplacessidebar.c:1535
+#: gtk/gtkplacessidebar.c:1538
 msgid "Show other locations"
 msgstr "Mostra altres ubicacions"
 
 #. Adjust start/stop items to reflect the type of the drive
-#: gtk/gtkplacessidebar.c:2334 gtk/gtkplacessidebar.c:3713
+#: gtk/gtkplacessidebar.c:2337 gtk/gtkplacessidebar.c:3716
 msgid "_Start"
 msgstr "_Inicia"
 
-#: gtk/gtkplacessidebar.c:2335 gtk/gtkplacessidebar.c:3714
+#: gtk/gtkplacessidebar.c:2338 gtk/gtkplacessidebar.c:3717
 msgid "_Stop"
 msgstr "_Atura"
 
 #. start() for type G_DRIVE_START_STOP_TYPE_SHUTDOWN is normally not used
-#: gtk/gtkplacessidebar.c:2342
+#: gtk/gtkplacessidebar.c:2345
 msgid "_Power On"
 msgstr "_Engega"
 
-#: gtk/gtkplacessidebar.c:2343
+#: gtk/gtkplacessidebar.c:2346
 msgid "_Safely Remove Drive"
 msgstr "Treu el suport de forma _segura"
 
-#: gtk/gtkplacessidebar.c:2347
+#: gtk/gtkplacessidebar.c:2350
 msgid "_Connect Drive"
 msgstr "_Connecta el suport"
 
-#: gtk/gtkplacessidebar.c:2348
+#: gtk/gtkplacessidebar.c:2351
 msgid "_Disconnect Drive"
 msgstr "_Desconnecta el suport"
 
-#: gtk/gtkplacessidebar.c:2352
+#: gtk/gtkplacessidebar.c:2355
 msgid "_Start Multi-disk Device"
 msgstr "_Inicia el dispositiu de discs múltiples"
 
-#: gtk/gtkplacessidebar.c:2353
+#: gtk/gtkplacessidebar.c:2356
 msgid "_Stop Multi-disk Device"
 msgstr "_Atura el dispositiu de discs múltiples"
 
 #. stop() for type G_DRIVE_START_STOP_TYPE_PASSWORD is normally not used
-#: gtk/gtkplacessidebar.c:2358
+#: gtk/gtkplacessidebar.c:2361
 msgid "_Unlock Device"
 msgstr "_Desbloca el dispositiu"
 
-#: gtk/gtkplacessidebar.c:2359
+#: gtk/gtkplacessidebar.c:2362
 msgid "_Lock Device"
 msgstr "_Bloca el dispositiu"
 
-#: gtk/gtkplacessidebar.c:2397 gtk/gtkplacessidebar.c:3394
+#: gtk/gtkplacessidebar.c:2400 gtk/gtkplacessidebar.c:3397
 #, c-format
 msgid "Unable to start “%s”"
 msgstr "No es pot iniciar «%s»"
 
-#: gtk/gtkplacessidebar.c:2430
+#: gtk/gtkplacessidebar.c:2433
 #, c-format
 msgid "Error unlocking “%s”"
 msgstr "S'ha produït un error desbloquejant «%s»"
 
-#: gtk/gtkplacessidebar.c:2432
+#: gtk/gtkplacessidebar.c:2435
 #, c-format
 msgid "Unable to access “%s”"
 msgstr "No es pot accedir a «%s»"
 
-#: gtk/gtkplacessidebar.c:2666
+#: gtk/gtkplacessidebar.c:2669
 msgid "This name is already taken"
 msgstr "Aquest nom ja està agafat"
 
-#: gtk/gtkplacessidebar.c:2735 gtk/inspector/actions.ui:43
+#: gtk/gtkplacessidebar.c:2738 gtk/inspector/actions.ui:43
 #: gtk/inspector/css-node-tree.ui:39 gtk/inspector/object-tree.ui:110
 #: gtk/ui/gtkfilechooserwidget.ui:220 gtk/ui/gtkfilechooserwidget.ui:543
 msgid "Name"
 msgstr "Nom"
 
-#: gtk/gtkplacessidebar.c:2935
+#: gtk/gtkplacessidebar.c:2938
 #, c-format
 msgid "Unable to unmount “%s”"
 msgstr "No es pot desmuntar «%s»"
 
-#: gtk/gtkplacessidebar.c:3111
+#: gtk/gtkplacessidebar.c:3114
 #, c-format
 msgid "Unable to stop “%s”"
 msgstr "No es pot aturar «%s»"
 
-#: gtk/gtkplacessidebar.c:3140
+#: gtk/gtkplacessidebar.c:3143
 #, c-format
 msgid "Unable to eject “%s”"
 msgstr "No es pot expulsar «%s»"
 
-#: gtk/gtkplacessidebar.c:3169 gtk/gtkplacessidebar.c:3198
+#: gtk/gtkplacessidebar.c:3172 gtk/gtkplacessidebar.c:3201
 #, c-format
 msgid "Unable to eject %s"
 msgstr "No es pot expulsar %s"
 
-#: gtk/gtkplacessidebar.c:3346
+#: gtk/gtkplacessidebar.c:3349
 #, c-format
 msgid "Unable to poll “%s” for media changes"
 msgstr "No es pot comprovar «%s» per si hi ha canvis de suports"
 
-#: gtk/gtkplacessidebar.c:3630 gtk/gtkplacessidebar.c:3696
+#: gtk/gtkplacessidebar.c:3633 gtk/gtkplacessidebar.c:3699
 #: gtk/gtkplacesview.c:1715
 msgid "Open in New _Tab"
 msgstr "Obre en una _pestanya nova"
 
-#: gtk/gtkplacessidebar.c:3636 gtk/gtkplacessidebar.c:3699
+#: gtk/gtkplacessidebar.c:3639 gtk/gtkplacessidebar.c:3702
 #: gtk/gtkplacesview.c:1726
 msgid "Open in New _Window"
 msgstr "Obre en una _finestra nova"
 
-#: gtk/gtkplacessidebar.c:3703
+#: gtk/gtkplacessidebar.c:3706
 msgid "_Add Bookmark"
 msgstr "_Afegeix una adreça d'interès"
 
-#: gtk/gtkplacessidebar.c:3704
+#: gtk/gtkplacessidebar.c:3707
 msgid "_Remove"
 msgstr "_Elimina"
 
-#: gtk/gtkplacessidebar.c:3705
+#: gtk/gtkplacessidebar.c:3708
 msgid "Rename…"
 msgstr "Canvia el nom…"
 
-#: gtk/gtkplacessidebar.c:3709 gtk/gtkplacesview.c:1760
+#: gtk/gtkplacessidebar.c:3712 gtk/gtkplacesview.c:1760
 msgid "_Mount"
 msgstr "_Munta"
 
-#: gtk/gtkplacessidebar.c:3710 gtk/gtkplacesview.c:1750
+#: gtk/gtkplacessidebar.c:3713 gtk/gtkplacesview.c:1750
 msgid "_Unmount"
 msgstr "_Desmunta"
 
-#: gtk/gtkplacessidebar.c:3711
+#: gtk/gtkplacessidebar.c:3714
 msgid "_Eject"
 msgstr "_Expulsa"
 
-#: gtk/gtkplacessidebar.c:3712
+#: gtk/gtkplacessidebar.c:3715
 msgid "_Detect Media"
 msgstr "_Detecta el suport"
 
-#: gtk/gtkplacessidebar.c:4158 gtk/gtkplacesview.c:1122
+#: gtk/gtkplacessidebar.c:4161 gtk/gtkplacesview.c:1122
 msgid "Computer"
 msgstr "Ordinador"
 
@@ -3593,58 +3568,58 @@ msgid "Print"
 msgstr "Imprimeix"
 
 # Connectada? (josep)
-#: gtk/gtkprintoperation-win32.c:631
+#: gtk/gtkprintoperation-win32.c:654
 msgid "Printer offline"
 msgstr "La impressora no està en línia"
 
-#: gtk/gtkprintoperation-win32.c:633
+#: gtk/gtkprintoperation-win32.c:656
 msgid "Out of paper"
 msgstr "No hi ha paper"
 
 #. Translators: this is a printer status.
-#: gtk/gtkprintoperation-win32.c:635
+#: gtk/gtkprintoperation-win32.c:658
 #: modules/printbackends/cups/gtkprintbackendcups.c:2680
 msgid "Paused"
 msgstr "En pausa"
 
-#: gtk/gtkprintoperation-win32.c:637
+#: gtk/gtkprintoperation-win32.c:660
 msgid "Need user intervention"
 msgstr "Cal la intervenció de l'usuari"
 
-#: gtk/gtkprintoperation-win32.c:742
+#: gtk/gtkprintoperation-win32.c:765
 msgid "Custom size"
 msgstr "Mida personalitzada"
 
-#: gtk/gtkprintoperation-win32.c:1613
+#: gtk/gtkprintoperation-win32.c:1681
 msgid "No printer found"
 msgstr "No s'ha trobat cap impressora"
 
-#: gtk/gtkprintoperation-win32.c:1640
+#: gtk/gtkprintoperation-win32.c:1708
 msgid "Invalid argument to CreateDC"
 msgstr "Argument no vàlid a la funció CreateDC"
 
-#: gtk/gtkprintoperation-win32.c:1676 gtk/gtkprintoperation-win32.c:1922
+#: gtk/gtkprintoperation-win32.c:1744 gtk/gtkprintoperation-win32.c:1996
 msgid "Error from StartDoc"
 msgstr "Error de StartDoc"
 
-#: gtk/gtkprintoperation-win32.c:1777 gtk/gtkprintoperation-win32.c:1800
-#: gtk/gtkprintoperation-win32.c:1848
+#: gtk/gtkprintoperation-win32.c:1851 gtk/gtkprintoperation-win32.c:1874
+#: gtk/gtkprintoperation-win32.c:1922
 msgid "Not enough free memory"
 msgstr "No hi ha prou memòria"
 
-#: gtk/gtkprintoperation-win32.c:1853
+#: gtk/gtkprintoperation-win32.c:1927
 msgid "Invalid argument to PrintDlgEx"
 msgstr "Argument no vàlid a PrintDlgEx"
 
-#: gtk/gtkprintoperation-win32.c:1858
+#: gtk/gtkprintoperation-win32.c:1932
 msgid "Invalid pointer to PrintDlgEx"
 msgstr "Punter no vàlid a PrintDlgEx"
 
-#: gtk/gtkprintoperation-win32.c:1863
+#: gtk/gtkprintoperation-win32.c:1937
 msgid "Invalid handle to PrintDlgEx"
 msgstr "Gestor no vàlid a PrintDlgEx"
 
-#: gtk/gtkprintoperation-win32.c:1868
+#: gtk/gtkprintoperation-win32.c:1942
 msgid "Unspecified error"
 msgstr "Error no especificat"
 
@@ -4085,24 +4060,24 @@ msgctxt "volume percentage"
 msgid "%d %%"
 msgstr "%d %%"
 
-#: gtk/gtkwindow.c:9303
+#: gtk/gtkwindow.c:9329
 msgid "Move"
 msgstr "Mou"
 
-#: gtk/gtkwindow.c:9311
+#: gtk/gtkwindow.c:9337
 msgid "Resize"
 msgstr "Canvia la mida"
 
-#: gtk/gtkwindow.c:9342
+#: gtk/gtkwindow.c:9368
 msgid "Always on Top"
 msgstr "Sempre per damunt"
 
-#: gtk/gtkwindow.c:12777
+#: gtk/gtkwindow.c:12803
 #, c-format
 msgid "Do you want to use GTK+ Inspector?"
 msgstr "Voleu utilitzar l'inspector de la GTK+?"
 
-#: gtk/gtkwindow.c:12779
+#: gtk/gtkwindow.c:12805
 #, c-format
 msgid ""
 "GTK+ Inspector is an interactive debugger that lets you explore and modify "
@@ -4113,7 +4088,7 @@ msgstr ""
 "modificar qualsevol aplicació GTK+ internament. Podeu arribar a trencar o "
 "fer fallar l'aplicació si l'utilitzeu."
 
-#: gtk/gtkwindow.c:12784
+#: gtk/gtkwindow.c:12810
 msgid "Don't show this message again"
 msgstr "No tornis a mostrar aquest missatge"
 
@@ -4126,7 +4101,7 @@ msgstr "Activa"
 msgid "State"
 msgstr "Estat"
 
-#: gtk/inspector/actions.ui:30 gtk/inspector/general.ui:115
+#: gtk/inspector/actions.ui:30 gtk/inspector/general.ui:196
 #: gtk/ui/gtkplacesview.ui:92
 msgid "Prefix"
 msgstr "Prefix"
@@ -4189,12 +4164,12 @@ msgstr "Valor"
 msgid "Show data"
 msgstr "Mostra les dades"
 
-#: gtk/inspector/general.c:309
+#: gtk/inspector/general.c:330
 msgctxt "GL version"
 msgid "None"
 msgstr "Cap"
 
-#: gtk/inspector/general.c:310
+#: gtk/inspector/general.c:331
 msgctxt "GL vendor"
 msgid "None"
 msgstr "Cap"
@@ -4207,23 +4182,31 @@ msgstr "Versió de la GTK+"
 msgid "GDK Backend"
 msgstr "Rerefons del GDK"
 
-#: gtk/inspector/general.ui:373
+#: gtk/inspector/general.ui:115
+msgid "Application ID"
+msgstr "ID d'aplicació"
+
+#: gtk/inspector/general.ui:149
+msgid "Resource Path"
+msgstr "Camí als recursos"
+
+#: gtk/inspector/general.ui:454
 msgid "Display"
 msgstr "Pantalla"
 
-#: gtk/inspector/general.ui:408
+#: gtk/inspector/general.ui:489
 msgid "RGBA visual"
 msgstr "Visual RGBA"
 
-#: gtk/inspector/general.ui:442
+#: gtk/inspector/general.ui:523
 msgid "Composited"
 msgstr "Compost"
 
-#: gtk/inspector/general.ui:489
+#: gtk/inspector/general.ui:570
 msgid "GL Version"
 msgstr "Versió de la GL"
 
-#: gtk/inspector/general.ui:524
+#: gtk/inspector/general.ui:605
 msgid "GL Vendor"
 msgstr "Proveïdor GL"
 
@@ -4964,7 +4947,7 @@ msgstr "Amplada completa"
 #: gtk/open-type-layout.h:46
 msgctxt "OpenType layout"
 msgid "Half Forms"
-msgstr "Formes mitjanes"
+msgstr "Mitges formes"
 
 #: gtk/open-type-layout.h:47
 msgctxt "OpenType layout"
@@ -5004,7 +4987,7 @@ msgstr "Formes Hojo Kanji"
 #: gtk/open-type-layout.h:54
 msgctxt "OpenType layout"
 msgid "Half Widths"
-msgstr "Amplada mitja"
+msgstr "Mitges amplades"
 
 #: gtk/open-type-layout.h:55
 msgctxt "OpenType layout"
@@ -5604,7 +5587,7 @@ msgstr "A4 extra"
 #: gtk/paper_names_offsets.c:25
 msgctxt "paper size"
 msgid "A4 Tab"
-msgstr "A4 tabloide"
+msgstr "A4 tabulat"
 
 #: gtk/paper_names_offsets.c:26
 msgctxt "paper size"
@@ -6790,7 +6773,7 @@ msgstr "Lidi"
 #: gtk/script-names.c:94
 msgctxt "Script"
 msgid "Avestan"
-msgstr "avèstic"
+msgstr "Avèstic"
 
 #: gtk/script-names.c:95
 msgctxt "Script"
@@ -6825,7 +6808,7 @@ msgstr "Javanès"
 #: gtk/script-names.c:101
 msgctxt "Script"
 msgid "Kaithi"
-msgstr "kaithi"
+msgstr "Kaithi"
 
 #: gtk/script-names.c:102
 msgctxt "Script"
@@ -7388,7 +7371,7 @@ msgstr "Connecta al _servidor"
 
 #: gtk/ui/gtkplacesview.ui:340
 msgid "Enter server address…"
-msgstr "Introduïu l'adreça del servidor..."
+msgstr "Introduïu l'adreça del servidor…"
 
 #: gtk/ui/gtkprintunixdialog.ui:112
 msgid "Printer"
@@ -7818,7 +7801,7 @@ msgid "Vietnamese (VIQR)"
 msgstr "Vietnamita (VIQR)"
 
 #. ID
-#: modules/input/imwayland.c:105
+#: modules/input/imwayland.c:106
 msgctxt "input method menu"
 msgid "Wayland"
 msgstr "Wayland"
@@ -7834,31 +7817,6 @@ msgstr "Waylandgtk"
 msgctxt "input method menu"
 msgid "X Input Method"
 msgstr "Mètode d'entrada d'X"
-
-#. Translators: The printer status is online, i.e. it is
-#. * ready to print.
-#: modules/printbackends/cloudprint/gtkprintbackendcloudprint.c:744
-msgid "Online"
-msgstr "Connectada"
-
-#. Translators: The printer is offline.
-#: modules/printbackends/cloudprint/gtkprintbackendcloudprint.c:751
-msgid "Offline"
-msgstr "Fora de línia"
-
-#. We shouldn't get here because the query omits dormant
-#. * printers by default.
-#. Translators: Printer has been offline for a long time.
-#: modules/printbackends/cloudprint/gtkprintbackendcloudprint.c:757
-msgid "Dormant"
-msgstr "Latent"
-
-#. How many document pages to go onto one side of paper.
-#: modules/printbackends/cloudprint/gtkprintbackendcloudprint.c:939
-#: modules/printbackends/file/gtkprintbackendfile.c:676
-#: modules/printbackends/test/gtkprintbackendtest.c:501
-msgid "Pages per _sheet:"
-msgstr "Pàgines per _full:"
 
 #: modules/printbackends/cups/gtkprintbackendcups.c:1159
 #: modules/printbackends/cups/gtkprintbackendcups.c:1468
@@ -8401,6 +8359,11 @@ msgstr "PostScript"
 #: modules/printbackends/file/gtkprintbackendfile.c:663
 msgid "SVG"
 msgstr "SVG"
+
+#: modules/printbackends/file/gtkprintbackendfile.c:676
+#: modules/printbackends/test/gtkprintbackendtest.c:501
+msgid "Pages per _sheet:"
+msgstr "Pàgines per _full:"
 
 #: modules/printbackends/file/gtkprintbackendfile.c:735
 msgid "File"

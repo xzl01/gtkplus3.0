@@ -34,6 +34,9 @@
 
 #include <string.h>
 
+#define STRING_MIMETYPE "text/plain"
+#define UTF8_STRING_MIMETYPE "text/plain;charset=utf-8"
+
 typedef struct _SelectionBuffer SelectionBuffer;
 typedef struct _SelectionData SelectionData;
 typedef struct _StoredSelection StoredSelection;
@@ -100,7 +103,7 @@ struct _GdkWaylandSelection
 
   /* Source-side data */
   GPtrArray *stored_selections; /* Array of StoredSelection */
-  GdkAtom current_request_selection;
+  StoredSelection *current_request_selection;
   GArray *source_targets;
   GdkAtom requested_target;
 
@@ -345,7 +348,7 @@ stored_selection_new (GdkWaylandSelection *wayland_selection,
 static void
 stored_selection_add_data (StoredSelection *stored_selection,
                            GdkPropMode      mode,
-                           guchar          *data,
+                           const guchar    *data,
                            gsize            data_len)
 {
   if (mode == GDK_PROP_MODE_REPLACE)
@@ -858,7 +861,12 @@ gdk_wayland_selection_reset_selection (GdkWaylandSelection *wayland_selection,
       stored_selection = g_ptr_array_index (wayland_selection->stored_selections, i);
 
       if (stored_selection->selection_atom == selection)
-        g_ptr_array_remove_index_fast (wayland_selection->stored_selections, i);
+        {
+          if (wayland_selection->current_request_selection == stored_selection)
+            wayland_selection->current_request_selection = NULL;
+
+          g_ptr_array_remove_index_fast (wayland_selection->stored_selections, i);
+        }
       else
         i++;
     }
@@ -877,21 +885,10 @@ gdk_wayland_selection_store (GdkWindow    *window,
 
   if (type == gdk_atom_intern_static_string ("NULL"))
     return;
-  if (selection->current_request_selection == GDK_NONE)
+  if (!selection->current_request_selection)
     return;
 
-  stored_selection =
-    gdk_wayland_selection_find_stored_selection (selection, window,
-                                                 selection->current_request_selection,
-                                                 type);
-
-  if (!stored_selection)
-    {
-      stored_selection = stored_selection_new (selection, window,
-                                               selection->current_request_selection,
-                                               type);
-      g_ptr_array_add (selection->stored_selections, stored_selection);
-    }
+  stored_selection = selection->current_request_selection;
 
   if ((mode == GDK_PROP_MODE_PREPEND ||
        mode == GDK_PROP_MODE_REPLACE) &&
@@ -915,7 +912,7 @@ gdk_wayland_selection_store (GdkWindow    *window,
     }
 
   /* Handle the next GDK_SELECTION_REQUEST / store, if any */
-  selection->current_request_selection = GDK_NONE;
+  selection->current_request_selection = NULL;
   gdk_wayland_selection_handle_next_request (selection);
 }
 
@@ -944,20 +941,41 @@ gdk_wayland_selection_lookup_requestor_buffer (GdkWindow *requestor)
 
 static gboolean
 gdk_wayland_selection_source_handles_target (GdkWaylandSelection *wayland_selection,
-                                             GdkAtom              target)
+                                             GdkAtom             *target)
 {
   GdkAtom atom;
+  GdkAtom string_atom, utf8_string_atom;
+  GdkAtom string_mimetype, utf8_string_mimetype;
   guint i;
 
-  if (target == GDK_NONE)
+  if (*target == GDK_NONE)
     return FALSE;
+
+  string_atom = gdk_atom_intern ("STRING", FALSE);
+  utf8_string_atom = gdk_atom_intern ("UTF8_STRING", FALSE);
+  string_mimetype = gdk_atom_intern (STRING_MIMETYPE, FALSE);
+  utf8_string_mimetype = gdk_atom_intern (UTF8_STRING_MIMETYPE, FALSE);
 
   for (i = 0; i < wayland_selection->source_targets->len; i++)
     {
       atom = g_array_index (wayland_selection->source_targets, GdkAtom, i);
 
-      if (atom == target)
+      if (atom == *target)
         return TRUE;
+
+      /* We might have converted (UTF8_)STRING to mimetypes when issuing
+       * the source.target requests, convert them back if needed.
+       */
+      if (atom == string_atom && *target == string_mimetype)
+        {
+          *target = string_atom;
+          return TRUE;
+        }
+      else if (atom == utf8_string_atom && *target == utf8_string_mimetype)
+        {
+          *target = utf8_string_atom;
+          return TRUE;
+        }
     }
 
   return FALSE;
@@ -979,7 +997,7 @@ gdk_wayland_selection_handle_next_request (GdkWaylandSelection *wayland_selectio
           gdk_wayland_selection_emit_request (stored_selection->source,
                                               stored_selection->selection_atom,
                                               stored_selection->type);
-          wayland_selection->current_request_selection = stored_selection->selection_atom;
+          wayland_selection->current_request_selection = stored_selection;
           break;
         }
     }
@@ -996,7 +1014,7 @@ gdk_wayland_selection_request_target (GdkWaylandSelection *wayland_selection,
   AsyncWriteData *write_data;
 
   if (!window ||
-      !gdk_wayland_selection_source_handles_target (wayland_selection, target))
+      !gdk_wayland_selection_source_handles_target (wayland_selection, &target))
     {
       close (fd);
       return FALSE;
@@ -1023,7 +1041,7 @@ gdk_wayland_selection_request_target (GdkWaylandSelection *wayland_selection,
 
   write_data = async_write_data_new (stored_selection, fd);
 
-  if (wayland_selection->current_request_selection == GDK_NONE)
+  if (!wayland_selection->current_request_selection)
     gdk_wayland_selection_handle_next_request (wayland_selection);
 
   return TRUE;
@@ -1435,13 +1453,29 @@ _gdk_wayland_display_set_selection_owner (GdkDisplay *display,
 }
 
 void
-_gdk_wayland_display_send_selection_notify (GdkDisplay *dispay,
+_gdk_wayland_display_send_selection_notify (GdkDisplay *display,
                                             GdkWindow  *requestor,
                                             GdkAtom     selection,
                                             GdkAtom     target,
                                             GdkAtom     property,
                                             guint32     time)
 {
+  GdkWaylandSelection *wayland_selection;
+
+  if (property != GDK_NONE)
+    return;
+
+  wayland_selection = gdk_wayland_display_get_selection (display);
+
+  if (!wayland_selection->current_request_selection)
+    return;
+
+  g_ptr_array_remove_fast (wayland_selection->stored_selections,
+                           wayland_selection->current_request_selection);
+
+  /* Handle the next GDK_SELECTION_REQUEST / store, if any */
+  wayland_selection->current_request_selection = NULL;
+  gdk_wayland_selection_handle_next_request (wayland_selection);
 }
 
 gint
@@ -1773,7 +1807,25 @@ gdk_wayland_selection_add_targets (GdkWindow *window,
     {
       gchar *mimetype = gdk_atom_name (targets[i]);
 
-      wl_data_source_offer (data_source, mimetype);
+      if (selection == atoms[ATOM_PRIMARY])
+        {
+          if (g_strcmp0 (mimetype, "STRING") == 0)
+            zwp_primary_selection_source_v1_offer (data_source, STRING_MIMETYPE);
+          else if (g_strcmp0 (mimetype, "UTF8_STRING") == 0)
+            zwp_primary_selection_source_v1_offer (data_source, UTF8_STRING_MIMETYPE);
+
+          zwp_primary_selection_source_v1_offer (data_source, mimetype);
+        }
+      else
+        {
+          if (g_strcmp0 (mimetype, "STRING") == 0)
+            wl_data_source_offer (data_source, STRING_MIMETYPE);
+          else if (g_strcmp0 (mimetype, "UTF8_STRING") == 0)
+            wl_data_source_offer (data_source, UTF8_STRING_MIMETYPE);
+
+          wl_data_source_offer (data_source, mimetype);
+        }
+
       g_free (mimetype);
     }
 

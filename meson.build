@@ -1,11 +1,12 @@
-project('gtk+-3.0', 'c',
-        version: '3.24.30',
-        default_options: [
-          'buildtype=debugoptimized',
-          'warning_level=1'
-        ],
-        meson_version : '>= 0.48.0',
-        license: 'LGPLv2.1+')
+project('gtk+', 'c',
+  version: '3.24.37',
+  default_options: [
+    'buildtype=debugoptimized',
+    'warning_level=1'
+  ],
+  meson_version : '>= 0.60.0',
+  license: 'LGPL-2.1-or-later',
+)
 
 glib_major_req = 2
 glib_minor_req = 57
@@ -52,7 +53,7 @@ gtk_version       = meson.project_version()
 gtk_major_version = gtk_version.split('.')[0].to_int()
 gtk_minor_version = gtk_version.split('.')[1].to_int()
 gtk_micro_version = gtk_version.split('.')[2].to_int()
-gtk_interface_age = 26
+gtk_interface_age = 32
 add_project_arguments('-DGTK_VERSION="@0@"'.format(meson.project_version()), language: 'c')
 
 add_project_arguments('-D_GNU_SOURCE', language: 'c')
@@ -94,14 +95,17 @@ if cc.get_id() == 'msvc'
     # Visual Studio 2015 and later (19.xx.xxxxx or later): look at the minor version.
     # If minor version < 10: Visual Studio 2015,
     #    10 < minor version < 20: Visual Studio 2017,
-    #    20 < minor version: Visual Studio 2019
+    #    20 < minor version < 30: Visual Studio 2019,
+    #    30 < minor version: Visual Studio 2022
     mscsubver = cc.version().split('.')[1].to_int()
     if mscsubver < 10
       vsver = 14
     elif mscsubver < 20
       vsver = 15
-    else
+    elif mscsubver < 30
       vsver = 16
+    else
+      vsver = 17
     endif
   endif
 
@@ -186,11 +190,6 @@ cdata.set_quoted('GTK_DATADIR', gtk_datadir)
 cdata.set_quoted('GTK_LIBDIR', gtk_libdir)
 cdata.set_quoted('GTK_SYSCONFDIR', gtk_sysconfdir)
 cdata.set_quoted('GETTEXT_PACKAGE', 'gtk30')
-cdata.set('GTK_MAJOR_VERSION', gtk_major_version)
-cdata.set('GTK_MINOR_VERSION', gtk_minor_version)
-cdata.set('GTK_MICRO_VERSION', gtk_micro_version)
-cdata.set('GTK_BINARY_AGE', gtk_binary_age)
-cdata.set('GTK_INTERFACE_AGE', gtk_interface_age)
 
 cdata.set_quoted('PACKAGE_URL', '')
 cdata.set_quoted('PACKAGE_NAME', 'gtk+')
@@ -417,25 +416,9 @@ if pangoft_dep.found()
   # We get the dependency itself from pango, but pango doesn't care
   # about ft2 version, so an extra check is needed.
 
-  # Update once Meson can have deps declared in a declarative manner
-  ft2_dep      = dependency('freetype2', version: '>= 2.7.1', required: false)
-
-  if not ft2_dep.found() and cc.get_id() == 'msvc'
-    if cc.has_header('ft2build.h') and cc.has_header('freetype/ftmm.h')
-      ft_lib = cc.find_library('freetype', required: false)
-      if ft_lib.found()
-        if cc.has_function('FT_Get_Var_Design_Coordinates', dependencies: ft_lib,
-                           prefix: '''#include <ft2build.h>
-                                      #include FT_MULTIPLE_MASTERS_H''')
-          ft2_dep = ft_lib
-        endif
-      endif
-    endif
-  endif
-
-  if not ft2_dep.found()
-    ft2_dep      = dependency('freetype2', version: '>= 2.7.1', fallback : ['freetype2', 'freetype_dep'])
-  endif
+  ft2_dep      = dependency(['freetype2','FreeType'],
+                            version: '>= 2.7.1',
+                            fallback : ['freetype2', 'freetype_dep'])
 endif
 
 if win32_enabled
@@ -494,10 +477,12 @@ if tracker3_enabled
 endif
 
 if iso_codes_dep.found()
-  cdata.set_quoted('ISO_CODES_PREFIX', iso_codes_dep.get_pkgconfig_variable('prefix'))
+  cdata.set_quoted('ISO_CODES_PREFIX', iso_codes_dep.get_variable(pkgconfig: 'prefix'))
 else
   cdata.set_quoted('ISO_CODES_PREFIX', get_option('prefix'))
 endif
+
+backend_immodules = []
 
 pc_gdk_extra_libs = []
 
@@ -554,10 +539,12 @@ if wayland_enabled
   wlprotocolsdep = dependency('wayland-protocols', version: wayland_proto_req)
   wlcursordep    = dependency('wayland-cursor', version: wayland_req)
   wlegldep       = dependency('wayland-egl')
+  backend_immodules += ['wayland']
+
+  cdata.set('HAVE_XDG_ACTIVATION', wlprotocolsdep.version().version_compare('>=1.21'))
 
   wayland_pkgs = [
     'wayland-client', wayland_req,
-    'wayland-protocols', wayland_proto_req,
     'xkbcommon', xkbcommon_req,
     'wayland-cursor', wayland_req,
     'wayland-egl',
@@ -578,6 +565,8 @@ if x11_enabled
   xcomposite_dep = dependency('xcomposite', required: false)
   fontconfig_dep = dependency('fontconfig', fallback: ['fontconfig', 'fontconfig_dep'])
   atkbridge_dep  = dependency('atk-bridge-2.0', version: at_spi2_atk_req)
+
+  backend_immodules += ['xim']
 
   x11_pkgs = ['fontconfig', 'x11', 'xext', 'xi', 'xrandr']
 
@@ -630,6 +619,14 @@ if x11_enabled
     endif
   endif
 
+  has_gesture_pinch_event = cc.has_member('XIGesturePinchEvent', 'type', dependencies: xi_dep,
+                                          prefix: '''#include <X11/Xlib.h>
+                                                     #include <X11/extensions/XInput2.h>''')
+  if has_gesture_pinch_event
+    cdata.set('XINPUT_2_4', 1)
+  endif
+
+
   enable_xinerama = get_option('xinerama')
   if enable_xinerama != 'no'
     want_xinerama = enable_xinerama == 'yes'
@@ -649,10 +646,13 @@ endif
 
 if broadway_enabled
   pc_gdk_extra_libs += ['-lz']
+  backend_immodules += ['broadway']
 endif
 
 if quartz_enabled
   pc_gdk_extra_libs += ['-Wl,-framework,Cocoa', '-Wl,-framework,Carbon', '-Wl,-framework,CoreGraphics']
+  backend_immodules += ['quartz']
+  cdata.set('QUARTZ_RELOCATION', 1)
 endif
 
 extra_demo_ldflags = []
@@ -666,7 +666,8 @@ if win32_enabled
   else
     pc_gdk_extra_libs += ['-Wl,-luuid']
   endif
-  pc_gdk_extra_libs += ['-lwinmm', '-ldwmapi', '-lsetupapi', '-lcfgmgr32']
+  pc_gdk_extra_libs += ['-lwinmm', '-ldwmapi', '-lsetupapi', '-lcfgmgr32', '-lhid', '-lwinspool', '-lcomctl32', '-lcomdlg32']
+  backend_immodules += ['ime']
 
   # Check whether libepoxy is built with EGL support on Windows
   win32_has_egl = epoxy_dep.get_variable(
@@ -677,25 +678,34 @@ endif
 
 # IMModules stuff-unfortunately we need to put items here
 # as they can be built as modules or built directly into GTK
+builtin_all_immodules = false
+
 builtin_modules_opt = get_option('builtin_immodules')
-if builtin_modules_opt == 'auto'
+builtin_immodules = []
+
+if builtin_modules_opt == ''
   if os_win32
     # Current MSVC projects build all immodules directly into GTK by default,
     # as does the mingw autotools build
     message('IMModules are built into GTK for MSVC builds by default')
-    builtin_immodules = true
+    builtin_immodules = ['all']
   else
-    builtin_immodules = false
+    builtin_immodules = ['none']
   endif
-elif builtin_modules_opt == 'yes'
-  builtin_immodules = true
 else
-  builtin_immodules = false
+  builtin_immodules = builtin_modules_opt.split(',')
+endif
+
+if builtin_immodules.contains('none')
+  builtin_immodules = []
+elif builtin_immodules.contains('all')
+  builtin_all_immodules = true
+elif builtin_immodules.contains('backend')
+  builtin_immodules += backend_immodules
 endif
 
 proto_sources = [
   'text-input-unstable-v3',
-  'gtk-text-input',
 ]
 proto_sources_outputs = []
 
@@ -749,7 +759,6 @@ immodules = [
   [ 'ime', files([ immodule_srcdir + 'gtkimcontextime.c', immodule_srcdir + 'imime.c' ]), win32_enabled ],
   [ 'quartz', files([ immodule_srcdir + 'imquartz.c' ]), quartz_enabled, [ '-xobjective-c' ] ],
   [ 'wayland', files([ immodule_srcdir + 'imwayland.c' ]) + proto_sources_outputs[0], wayland_enabled ],
-  [ 'waylandgtk', files([ immodule_srcdir + 'imwaylandgtk.c'])  + proto_sources_outputs[1], wayland_enabled ],
   [ 'xim', files([ immodule_srcdir + 'gtkimcontextxim.c', immodule_srcdir + 'imxim.c' ]), x11_enabled ],
 ]
 
@@ -836,7 +845,10 @@ if os_darwin
   module_suffix = 'so'
 endif
 
-build_gir = get_option('introspection')
+# Introspection
+gir = find_program('g-ir-scanner', required : get_option('introspection'))
+build_gir = gir.found() and get_option('introspection')
+
 subdir('gdk')
 subdir('gtk')
 subdir('modules')
@@ -853,9 +865,10 @@ if get_option('examples')
 endif
 
 # config.h
-configure_file(input: 'config.h.meson',
-               output: 'config.h',
-               configuration: cdata)
+configure_file(
+  output: 'config.h',
+  configuration: cdata,
+)
 
 # pkg-config files - bit of a mess all of this
 pkgconf = configuration_data()
@@ -980,13 +993,15 @@ subdir('docs/reference')
 
 install_data('m4macros/gtk-3.0.m4', install_dir: join_paths(get_option('datadir'), 'aclocal'))
 
-# Keep this in sync with post-install.py expected arguments
-meson.add_install_script('build-aux/meson/post-install.py',
-                         gtk_api_version,
-                         gtk_binary_version,
-                         join_paths(gtk_prefix, get_option('bindir')),
-                         gtk_libdir,
-                         gtk_datadir)
+if not meson.is_cross_build()
+  gnome.post_install(
+    glib_compile_schemas: true,
+    gio_querymodules: gio_module_dirs,
+    gtk_update_icon_cache: get_option('demos'),
+  )
+else
+  message('Not executing post-install steps automatically when cross compiling')
+endif
 
 if host_machine.system() != 'windows'
   # Install Valgrind suppression files (except on Windows,
@@ -994,16 +1009,6 @@ if host_machine.system() != 'windows'
   install_data('gtk.supp',
     install_dir : join_paths(gtk_datadir, 'gtk-3.0', 'valgrind'))
 endif
-
-test(
-  'version-check',
-  find_program('check-version.py'),
-  args: [
-    join_paths(meson.current_source_dir(), 'configure.ac'),
-    join_paths(meson.current_source_dir(), 'meson.build'),
-  ],
-  suite: 'gtk',
-)
 
 summary = [
   '',

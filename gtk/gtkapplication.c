@@ -113,7 +113,7 @@
  *
  * ## A simple application ## {#gtkapplication}
  *
- * [A simple example](https://git.gnome.org/browse/gtk+/tree/examples/bp/bloatpad.c)
+ * [A simple example](https://gitlab.gnome.org/GNOME/gtk/-/blob/gtk-3-24/examples/bp/bloatpad.c)
  *
  * GtkApplication optionally registers with a session manager
  * of the users session (if you set the #GtkApplication:register-session
@@ -376,18 +376,6 @@ static void
 gtk_application_after_emit (GApplication *application,
                             GVariant     *platform_data)
 {
-  const char *startup_notification_id = NULL;
-
-  g_variant_lookup (platform_data, "desktop-startup-id", "&s", &startup_notification_id);
-  if (startup_notification_id)
-    {
-      GdkDisplay *display;
-
-      display = gdk_display_get_default ();
-      if (display)
-        gdk_display_notify_startup_complete (display, startup_notification_id);
-    }
-
   gdk_threads_leave ();
 }
 

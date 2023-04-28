@@ -35,6 +35,7 @@
 #include "gdkquartzdisplay.h"
 #include "gdkprivate-quartz.h"
 #include "gdkinternal-quartz.h"
+#include "gdkquartz-cocoa-access.h"
 #include "gdkquartzdevicemanager-core.h"
 #include "gdkquartzkeys.h"
 #include "gdkkeys-quartz.h"
@@ -387,7 +388,7 @@ get_window_point_from_screen_point (GdkWindow *window,
   NSPoint point;
   GdkQuartzNSWindow *nswindow;
 
-  nswindow = (GdkQuartzNSWindow*)(((GdkWindowImplQuartz *)window->impl)->toplevel);
+  nswindow = (GdkQuartzNSWindow*)gdk_quartz_window_get_nswindow (window);
   point = [nswindow convertPointFromScreen:screen_point];
   *x = point.x;
   *y = window->height - point.y;
@@ -396,7 +397,7 @@ get_window_point_from_screen_point (GdkWindow *window,
 static gboolean
 is_mouse_button_press_event (NSEventType type)
 {
-  switch (type)
+  switch ((int)type)
     {
       case GDK_QUARTZ_LEFT_MOUSE_DOWN:
       case GDK_QUARTZ_RIGHT_MOUSE_DOWN:
@@ -658,18 +659,21 @@ find_toplevel_under_pointer (GdkDisplay *display,
 
     }
 
-  if (toplevel)
-    {
-      get_window_point_from_screen_point (toplevel, screen_point, x, y);
-      /* If the coordinates are out of window bounds, this toplevel is not
-       * under the pointer and we thus return NULL. This can occur when
-       * toplevel under pointer has not yet been updated due to a very recent
-       * window resize. Alternatively, we should no longer be relying on
-       * the toplevel_under_pointer value which is maintained in gdkwindow.c.
-       */
-      if (*x < 0 || *y < 0 || *x >= toplevel->width || *y >= toplevel->height)
-        return NULL;
-    }
+  /* If the stored toplevel is NULL or _gdk_root it's not useful,
+   * return NULL to regenerate.
+   */
+  if (toplevel == NULL || toplevel == _gdk_root )
+    return NULL;
+
+  get_window_point_from_screen_point (toplevel, screen_point, x, y);
+  /* If the coordinates are out of window bounds, this toplevel is not
+    * under the pointer and we thus return NULL. This can occur when
+    * toplevel under pointer has not yet been updated due to a very recent
+    * window resize. Alternatively, we should no longer be relying on
+    * the toplevel_under_pointer value which is maintained in gdkwindow.c.
+    */
+  if (*x < 0 || *y < 0 || *x >= toplevel->width || *y >= toplevel->height)
+    return NULL;
 
   return toplevel;
 }
@@ -789,12 +793,7 @@ find_toplevel_for_mouse_event (NSEvent    *nsevent,
       if (toplevel_under_pointer
           && WINDOW_IS_TOPLEVEL (toplevel_under_pointer))
         {
-          GdkWindowImplQuartz *toplevel_impl;
-
           toplevel = toplevel_under_pointer;
-
-          toplevel_impl = (GdkWindowImplQuartz *)toplevel->impl;
-
           *x = x_tmp;
           *y = y_tmp;
         }
@@ -851,10 +850,43 @@ find_window_for_ns_event (NSEvent *nsevent,
       /* Only handle our own entered/exited events, not the ones for the
        * titlebar buttons.
        */
-      if ([view trackingRect] == [nsevent trackingNumber])
-        return toplevel;
-      else
-        return NULL;
+      if ([view trackingRect] == nsevent.trackingNumber)
+          return toplevel;
+
+      /* MacOS 13 isn't sending the trackingArea events so we have to
+       * rely on the cursorRect events that we discarded in earlier
+       * macOS versions. These trigger 4 pixels out from the window's
+       * frame so we obtain that rect and adjust it for hit testing.
+       */
+      if (!nsevent.trackingArea && gdk_quartz_osx_version() >= GDK_OSX_VENTURA)
+        {
+          static const int border_width = 4;
+          NSRect frame = nsevent.window.frame;
+          gboolean inside, at_edge;
+
+          frame.origin.x -= border_width;
+          frame.origin.y -= border_width;
+          frame.size.width += 2 * border_width;
+          frame.size.height += 2 * border_width;
+          inside =
+               screen_point.x >= frame.origin.x &&
+               screen_point.x <= frame.origin.x + frame.size.width &&
+               screen_point.y >= frame.origin.y &&
+               screen_point.y <= frame.origin.y + frame.size.height;
+          at_edge =
+               screen_point.x >= frame.origin.x - 1 &&
+               screen_point.x <= frame.origin.x + frame.size.width + 1 &&
+               screen_point.y >= frame.origin.y - 1 &&
+               screen_point.y <= frame.origin.y + frame.size.height + 1;
+
+          if ((event_type == GDK_QUARTZ_MOUSE_ENTERED && inside) ||
+              at_edge)
+            return toplevel;
+          else
+            return NULL;
+        }
+
+      return NULL;
 
     case GDK_QUARTZ_KEY_DOWN:
     case GDK_QUARTZ_KEY_UP:
@@ -1029,7 +1061,7 @@ fill_button_event (GdkWindow *window,
   state = get_keyboard_modifiers_from_ns_event (nsevent) |
          _gdk_quartz_events_get_current_mouse_modifiers ();
 
-  switch ([nsevent type])
+  switch ((int)[nsevent type])
     {
     case GDK_QUARTZ_LEFT_MOUSE_DOWN:
     case GDK_QUARTZ_RIGHT_MOUSE_DOWN:
@@ -1136,9 +1168,6 @@ fill_scroll_event (GdkWindow          *window,
                    GdkScrollDirection  direction)
 {
   GdkSeat *seat = gdk_display_get_default_seat (_gdk_display);
-  NSPoint point;
-
-  point = [nsevent locationInWindow];
 
   event->any.type = GDK_SCROLL;
   event->scroll.window = window;
@@ -1405,7 +1434,7 @@ test_resize (NSEvent *event, GdkWindow *toplevel, gint x, gint y)
   /* Resizing from the resize indicator only begins if an GDK_QUARTZ_LEFT_MOUSE_BUTTON
    * event is received in the resizing area.
    */
-  toplevel_impl = (GdkWindowImplQuartz *)toplevel->impl;
+  toplevel_impl = GDK_WINDOW_IMPL_QUARTZ (toplevel->impl);
   if ([toplevel_impl->toplevel showsResizeIndicator])
   if ([event type] == GDK_QUARTZ_LEFT_MOUSE_DOWN &&
       [toplevel_impl->toplevel showsResizeIndicator])

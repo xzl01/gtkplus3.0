@@ -1143,9 +1143,15 @@ wintab_init_check (GdkDeviceManagerWin32 *device_manager)
                                 devix, *hctx));
 
       wintab_contexts = g_list_append (wintab_contexts, hctx);
-#if 0
-      (*p_WTEnable) (*hctx, TRUE);
-#endif
+
+      /* Set the CXO_SYSTEM flag */
+      if (!(lc.lcOptions & CXO_SYSTEM))
+        {
+          lc.lcOptions |= CXO_SYSTEM;
+          if (!p_WTSetA (*hctx, &lc))
+            g_warning ("Could not set the CXO_SYSTEM option in the WINTAB context");
+        }
+
       (*p_WTOverlap) (*hctx, TRUE);
 
 #if DEBUG_WINTAB
@@ -1756,10 +1762,12 @@ winpointer_make_event (GdkDisplay *display,
   x /= impl->window_scale;
   y /= impl->window_scale;
 
+  /* info->dwKeyStates is not reliable. We shall use
+   * GetKeyState here even for Ctrl and Shift. */
   state = 0;
-  if (info->dwKeyStates & POINTER_MOD_CTRL)
+  if (GetKeyState (VK_CONTROL) < 0)
     state |= GDK_CONTROL_MASK;
-  if (info->dwKeyStates & POINTER_MOD_SHIFT)
+  if (GetKeyState (VK_SHIFT) < 0)
     state |= GDK_SHIFT_MASK;
   if (GetKeyState (VK_MENU) < 0)
     state |= GDK_MOD1_MASK;
@@ -2492,6 +2500,8 @@ G_GNUC_END_IGNORE_DEPRECATIONS;
           event->button.time = _gdk_win32_get_next_tick (msg->time);
 	  if (source_device->sends_core)
 	    gdk_event_set_device (event, device_manager->core_pointer);
+          else
+            gdk_event_set_device (event, GDK_DEVICE (source_device));
           gdk_event_set_source_device (event, GDK_DEVICE (source_device));
           gdk_event_set_seat (event, gdk_device_get_seat (device_manager->core_pointer));
 
@@ -2524,7 +2534,10 @@ G_GNUC_END_IGNORE_DEPRECATIONS;
         {
           event->motion.time = _gdk_win32_get_next_tick (msg->time);
           event->motion.is_hint = FALSE;
-          gdk_event_set_device (event, device_manager->core_pointer);
+          if (source_device->sends_core)
+            gdk_event_set_device (event, device_manager->core_pointer);
+          else
+            gdk_event_set_device (event, GDK_DEVICE (source_device));
           gdk_event_set_source_device (event, GDK_DEVICE (source_device));
           gdk_event_set_seat (event, gdk_device_get_seat (device_manager->core_pointer));
 

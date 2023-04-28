@@ -98,15 +98,16 @@
  * # GtkWindow as GtkBuildable
  *
  * The GtkWindow implementation of the #GtkBuildable interface supports a
- * custom <accel-groups> element, which supports any number of <group>
+ * custom `<accel-groups>` element, which supports any number of `<group>`
  * elements representing the #GtkAccelGroup objects you want to add to
  * your window (synonymous with gtk_window_add_accel_group().
  *
- * It also supports the <initial-focus> element, whose name property names
+ * It also supports the `<initial-focus>` element, whose name property names
  * the widget to receive the focus when the window is mapped.
  *
  * An example of a UI definition fragment with accel groups:
- * |[
+ *
+ * |[<!-- language="xml" -->
  * <object class="GtkWindow">
  *   <accel-groups>
  *     <group name="accelgroup1"/>
@@ -121,7 +122,7 @@
  * 
  * The GtkWindow implementation of the #GtkBuildable interface supports
  * setting a child as the titlebar by specifying “titlebar” as the “type”
- * attribute of a <child> element.
+ * attribute of a `<child>` element.
  *
  * # CSS nodes
  *
@@ -264,6 +265,8 @@ struct _GtkWindowPrivate
   guint    fixate_size               : 1;
 
   guint    use_subsurface            : 1;
+
+  guint    in_present                : 1;
 
   GdkWindowTypeHint type_hint;
 
@@ -1382,9 +1385,33 @@ gtk_window_titlebar_action (GtkWindow      *window,
                             guint           button,
                             gint            n_press)
 {
+  GdkTitlebarGesture gesture = 0;
+  GdkWindow *gdk_window;
   GtkSettings *settings;
   gchar *action = NULL;
   gboolean retval = TRUE;
+
+  switch (button)
+    {
+    case GDK_BUTTON_PRIMARY:
+      if (n_press == 2)
+        gesture = GDK_TITLEBAR_GESTURE_DOUBLE_CLICK;
+      break;
+    case GDK_BUTTON_MIDDLE:
+      gesture = GDK_TITLEBAR_GESTURE_MIDDLE_CLICK;
+      break;
+    case GDK_BUTTON_SECONDARY:
+      gesture = GDK_TITLEBAR_GESTURE_RIGHT_CLICK;
+      break;
+    }
+
+  gdk_window = _gtk_widget_get_window (GTK_WIDGET (window));
+  if (gesture &&
+      GDK_PRIVATE_CALL (gdk_window_titlebar_gesture (gdk_window, gesture)))
+    {
+      retval = TRUE;
+      goto out;
+    }
 
   settings = gtk_widget_get_settings (GTK_WIDGET (window));
   switch (button)
@@ -1431,6 +1458,7 @@ gtk_window_titlebar_action (GtkWindow      *window,
 
   g_free (action);
 
+out:
   return retval;
 }
 
@@ -2537,15 +2565,12 @@ gtk_window_set_startup_id (GtkWindow   *window,
        */
       if (startup_id_is_fake (priv->startup_id))
 	gtk_window_present_with_time (window, timestamp);
-      else 
+      else
         {
-          gdk_window_set_startup_id (gdk_window,
-                                     priv->startup_id);
-          
-          /* If window is mapped, terminate the startup-notification too */
+          /* If window is mapped, terminate the startup-notification */
           if (_gtk_widget_get_mapped (widget) &&
               !disable_startup_notification)
-            gdk_notify_startup_complete_with_id (priv->startup_id);
+            gdk_window_set_startup_id (gdk_window, priv->startup_id);
         }
     }
 
@@ -6254,6 +6279,36 @@ popover_map (GtkWidget        *widget,
 }
 
 static void
+gtk_window_notify_startup (GtkWindow *window)
+{
+  GtkWindowPrivate *priv = window->priv;
+
+  if (!disable_startup_notification &&
+      !GTK_IS_OFFSCREEN_WINDOW (window) &&
+      priv->type != GTK_WINDOW_POPUP)
+    {
+      GdkWindow *gdk_window;
+
+      gdk_window = _gtk_widget_get_window (GTK_WIDGET (window));
+
+      /* Do we have a custom startup-notification id? */
+      if (priv->startup_id != NULL)
+        {
+          /* Make sure we have a "real" id */
+          if (!startup_id_is_fake (priv->startup_id))
+            gdk_window_set_startup_id (gdk_window, priv->startup_id);
+
+          g_free (priv->startup_id);
+          priv->startup_id = NULL;
+        }
+      else
+        {
+          gdk_window_set_startup_id (gdk_window, NULL);
+        }
+    }
+}
+
+static void
 gtk_window_map (GtkWidget *widget)
 {
   GtkWidget *child;
@@ -6328,25 +6383,8 @@ gtk_window_map (GtkWidget *widget)
 
   gdk_window_show (gdk_window);
 
-  if (!disable_startup_notification &&
-      !GTK_IS_OFFSCREEN_WINDOW (window) &&
-      priv->type != GTK_WINDOW_POPUP)
-    {
-      /* Do we have a custom startup-notification id? */
-      if (priv->startup_id != NULL)
-        {
-          /* Make sure we have a "real" id */
-          if (!startup_id_is_fake (priv->startup_id))
-            gdk_notify_startup_complete_with_id (priv->startup_id);
-
-          g_free (priv->startup_id);
-          priv->startup_id = NULL;
-        }
-      else
-        {
-          gdk_notify_startup_complete ();
-        }
-    }
+  if (!priv->in_present)
+    gtk_window_notify_startup (window);
 
   /* if mnemonics visible is not already set
    * (as in the case of popup menus), then hide mnemonics initially
@@ -7588,8 +7626,6 @@ gtk_window_realize (GtkWidget *widget)
             gdk_x11_window_set_user_time (gdk_window, timestamp);
         }
 #endif
-      if (!startup_id_is_fake (priv->startup_id))
-        gdk_window_set_startup_id (gdk_window, priv->startup_id);
     }
 
 #ifdef GDK_WINDOWING_X11
@@ -10571,8 +10607,12 @@ gtk_window_present_with_time (GtkWindow *window,
   else
     {
       priv->initial_timestamp = timestamp;
+      priv->in_present = TRUE;
       gtk_widget_show (widget);
+      priv->in_present = FALSE;
     }
+
+  gtk_window_notify_startup (window);
 }
 
 /**
@@ -10678,7 +10718,7 @@ gtk_window_stick (GtkWindow *window)
  * window is definitely unstuck afterward, because other entities
  * (e.g. the user or [window manager][gtk-X11-arch]) could
  * stick it again. But normally the window will
- * end up stuck. Just don’t write code that crashes if not.
+ * end up unstuck. Just don’t write code that crashes if not.
  *
  * You can track stickiness via the “window-state-event” signal
  * on #GtkWidget.

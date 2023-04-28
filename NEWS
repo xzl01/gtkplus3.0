@@ -1,3 +1,281 @@
+Overview of Changes in GTK+ 3.24.37, 02-03-2023
+===============================================
+
+* Support the file transfer portal for copy-paste and DND
+
+* Treat XKB_MODE_NAME_LODO as super key
+
+* Refactor startup notification handling to be in sync with GTK 4
+
+* GL: Synchronie when calling MakeCurrent
+
+* CSS: Fix a problem with stopping animations
+
+* Wayland: Drop the legacy text input module
+
+* Windows: Set the default file extension in the native file chooser
+
+* Translation updates:
+ Abkhazian
+ Turkish
+
+
+Overview of Changes in GTK+ 3.24.36, 12-22-2022
+===============================================
+
+This release is the first GTK 3 release to exclusively
+use the meson build system.
+
+* GtkLabel:
+ - Tweak selection behavior
+
+* GtkEmojiChooser:
+ - Properly handle empty recent section
+
+* GtkFileChooser:
+ - Make ~ key work regardless of dead keys
+
+* build:
+ - Improve handling of flaky tests
+ - Drop the autotools build
+
+* Wayland:
+ - Fix problems with X<>Wayland DND
+ - Revert cursor changes from 3.24.35
+ - Fix handling of surrounding text in input
+
+* Windows:
+ - Improve handling of line ends in clipboard
+
+* MacOS:
+ - Use NSTrackingArea
+
+* Translation updates:
+ Abkhazian
+ Basque
+ Brazilian Portuguese
+ Catalan
+ Interlingue
+ Persian
+
+
+Overview of Changes in GTK+ 3.24.35, 11-22-2022
+===============================================
+
+* GtkFontChooserWidget:
+ - Fix a critical
+
+* GtkAccelLabel:
+ - Differentiate keypad keysyms in accelerators
+
+* Input:
+ - Recognize stylus devices as pens
+ - Fix problems with motion compression
+
+* Windows:
+ - Build system improvements
+
+* Wayland:
+ - Fix problems with unreliable DND
+ - Use GLES if required
+ - Add support for titlebar gestures
+ - Refactor handling of IM client updates
+ - Fix cursor hotspots with scaled surfaces
+ - Use the xdg-activation protocol
+ - Load cursors on demand
+ - Fix cursor size on hi-dpi displays
+
+* MacOS:
+ - Use a CVDisplayLink based frame clock
+
+- Translation updates:
+ Abkhazian
+ Bulgarian
+ Catalan
+ Chinese (Taiwan)
+ Croatian
+ Dutch
+ Friulian
+ Georgian
+ German
+ Hungarian
+ Indonesian
+ Occitan
+ Persian
+ Portuguese
+ Polish
+ Russian
+ Serbian
+ Slovenian
+ Swedish
+ Turkish
+ Ukrainian
+
+
+Overview of Changes in GTK+ 3.24.34, 05-18-2022
+===============================================
+
+* Include legacy hicolor icons
+
+* Fix the build with gcc 12
+
+* MacOS:
+ - Restore QUARTZ_RELOCATION support
+
+* X11:
+ - Trap errors when getting output properties
+
+* Wayland:
+ - Ignore empty preedit updates This fixes a problem with
+   textview scrolling
+
+* Translation updates
+ Danish
+ Dutch
+ French
+ German
+ Hungarian
+ Italian
+ Kazakh
+ Latvian
+ Lithuanian
+ Norwegian Bokmål
+ Swedish
+
+Overview of Changes in GTK+ 3.24.33, 04-03-2022
+===============================================
+
+* No changes
+
+Overview of Changes in GTK+ 3.24.32, 03-03-2022
+===============================================
+
+* GtkCellRendererProgress:
+ - Use tabular figures
+
+* GtkFontChooser:
+ - Fix the build with older Pango
+ - Fix axis name handling
+
+* Theme:
+ - Fix border color for tiled windows
+
+* Accessibility:
+ - Fix cell accessible leak
+
+* Wayland:
+ - Support new high-contrast setting
+ - Only update scale when on any outputs
+
+* Windows:
+ - Various build fixes
+ - Fix keyboard state handling
+ - Fix capslock handling
+ - Fix AltGr not working
+
+* MacOS:
+ - Fix the build on 10.11
+ - Make Dock "Quit" invoke the app.quit action
+ - Correctly handle HiDPI cursors
+
+* Translation updates
+ Basque
+ Brazilian Portuguese
+ Catalan
+ Chinese (China)
+ Croatian
+ Czech
+ French
+ Galician
+ Hebrew
+ Indonesian
+ Korean
+ Persian
+ Polish
+ Portuguese
+ Romanian
+ Russian
+ Serbian
+ Slovenian
+ Spanish
+ Swedish
+ Turkish
+ Ukrainian
+
+
+Overview of Changes in GTK+ 3.24.31, 20-12-2021
+===============================================
+
+* input:
+ - Fix a crash with touch on GtkScale
+
+* clipboard:
+ - Avoid a double-free
+
+* css:
+ - Avoid a crash with radial gradients
+
+* GtkFileChooser:
+ - Don't leak search results
+
+* GtkTextView:
+ - Support css letterspacing
+
+* Wayland:
+ - Reset position when hiding popups
+ - Ignore globals we did not bind ourselves
+ - Avoid infinite loops when hiding surfaces
+ - Avoid clipboard-related lockups
+
+* X11:
+ - Trap errors while doing XRANDR calls
+ - Support touchpad gestures with XI 2.4
+
+* win32:
+ - Some OpenGL setup fixes
+ - Fall back to GLES for OpenGL
+ - Fix MinGW autotools build
+ - Fix building on Windows 11
+ - Support building with Visual Studio 2022
+ - Improve DND across monitors
+ - Rewrite keymap handling code
+
+* macOS:
+ - Accept NSPasteboardTypeFileURL drops
+ - Build on macOS 12
+ - Fix display on macOS 12
+ - Fix keyboard layout notifications
+ - Fix a crash
+ - Improve performance on Big Sur
+
+* Translation updates:
+ Basque
+ Brazilian Portuguese
+ Chinese (China)
+ Chinese (Taiwan)
+ Croatian
+ Czech
+ Danish
+ Dutch
+ Finnish
+ French
+ Friulian
+ Galician
+ German
+ Hungarian
+ Icelandic
+ Italian
+ Kazakh
+ Korean
+ Latvian
+ Occitan
+ Persian
+ Russian
+ Serbian
+ Spanish
+ Swedish
+
+
 Overview of Changes in GTK+ 3.24.30
 ===================================
 

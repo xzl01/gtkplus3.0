@@ -2901,6 +2901,7 @@ gdk_x11_window_set_startup_id (GdkWindow   *window,
 			       const gchar *startup_id)
 {
   GdkDisplay *display;
+  gchar *free_this = NULL;
 
   g_return_if_fail (GDK_IS_WINDOW (window));
 
@@ -2918,6 +2919,23 @@ gdk_x11_window_set_startup_id (GdkWindow   *window,
   else
     XDeleteProperty (GDK_DISPLAY_XDISPLAY (display), GDK_WINDOW_XID (window),
                      gdk_x11_get_xatom_by_name_for_display (display, "_NET_STARTUP_ID"));
+
+  if (startup_id == NULL)
+    {
+      GdkX11Display *display_x11 = GDK_X11_DISPLAY (display);
+
+      startup_id = free_this = display_x11->startup_notification_id;
+      display_x11->startup_notification_id = NULL;
+
+      if (startup_id == NULL)
+        return;
+    }
+
+  gdk_x11_display_broadcast_startup_message (display, "remove",
+                                             "ID", startup_id,
+                                             NULL);
+
+  g_free (free_this);
 }
 
 static void
@@ -3240,13 +3258,18 @@ gdk_x11_window_get_frame_extents (GdkWindow    *window,
   impl = GDK_WINDOW_IMPL_X11 (window->impl);
 
   /* Refine our fallback answer a bit using local information */
-  rect->x = window->x * impl->window_scale;
-  rect->y = window->y * impl->window_scale;
-  rect->width = window->width * impl->window_scale;
-  rect->height = window->height * impl->window_scale;
+  rect->x = window->x;
+  rect->y = window->y;
+  rect->width = window->width;
+  rect->height = window->height;
 
   if (GDK_WINDOW_DESTROYED (window) || impl->override_redirect)
     return;
+
+  rect->x *= impl->window_scale;
+  rect->y *= impl->window_scale;
+  rect->width *= impl->window_scale;
+  rect->height *= impl->window_scale;
 
   nvroots = 0;
   vroots = NULL;
@@ -5636,6 +5659,8 @@ gdk_x11_get_server_time (GdkWindow *window)
 XID
 gdk_x11_window_get_xid (GdkWindow *window)
 {
+  g_return_val_if_fail (GDK_IS_X11_WINDOW (window), None);
+
   /* Try to ensure the window has a native window */
   if (!_gdk_window_has_impl (window))
     {

@@ -49,6 +49,7 @@
 
 static gboolean gdk_synchronize = FALSE;
 
+#ifdef DLL_EXPORT
 BOOL WINAPI
 DllMain (HINSTANCE hinstDLL,
 	 DWORD     dwReason,
@@ -58,6 +59,7 @@ DllMain (HINSTANCE hinstDLL,
 
   return TRUE;
 }
+#endif
 
 void
 _gdk_win32_windowing_init (void)
@@ -66,6 +68,17 @@ _gdk_win32_windowing_init (void)
 
   if (gdk_synchronize)
     GdiSetBatchLimit (1);
+
+#ifndef DLL_EXPORT
+  if (!GetModuleHandleExW (GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)_gdk_win32_windowing_init,
+                           &_gdk_dll_hinstance))
+    {
+      g_error ("GetModuleHandleExW failed with error code %u\n",
+               (unsigned) GetLastError ());
+    }
+#endif
 
   _gdk_app_hmodule = GetModuleHandle (NULL);
   _gdk_display_hdc = CreateDC ("DISPLAY", NULL, NULL, NULL);

@@ -660,6 +660,10 @@ if os_unix and tracker3_enabled
 endif
 
 if os_unix
+  gtk_unix_sources += 'filetransferportal.c'
+endif
+
+if os_unix
   gtk_sources += gtk_unix_sources
 endif
 
@@ -847,7 +851,7 @@ gtk_deps = [
 ]
 
 if x11_enabled
-  x11_data_prefix = dependency('x11').get_pkgconfig_variable('prefix')
+  x11_data_prefix = dependency('x11').get_variable(pkgconfig: 'prefix')
 
   gtk_cargs += [ '-DX11_DATA_PREFIX="@0@"'.format(x11_data_prefix), ]
   gtk_sources += gtk_use_x11_sources
@@ -959,7 +963,7 @@ foreach l: immodules
   cond = l.get(2, true)
   cflags = l.get(3, [])
 
-  if cond and builtin_immodules
+  if cond and (builtin_immodules.contains(name) or builtin_all_immodules)
     gtk_cargs += ['-DINCLUDE_IM_@0@'.format(name.underscorify())]
     mod = static_library('staticimmodule-@0@'.format(name),
                          sources + gtk_dep_sources,
@@ -1067,6 +1071,8 @@ install_data('gtkbuilder.loc', 'gtkbuilder.its',
              install_dir: join_paths(gtk_datadir, 'gettext/its'))
 
 ####### Utils ######
+gtk_tools = []
+
 gtk_query_settings = executable(
   'gtk-query-settings',
   'gtk-query-settings.c',
@@ -1074,6 +1080,7 @@ gtk_query_settings = executable(
   dependencies: libgtk_dep,
   install: true
 )
+gtk_tools += gtk_query_settings
 
 gtk_builder_tool = executable(
   'gtk-builder-tool',
@@ -1082,6 +1089,7 @@ gtk_builder_tool = executable(
   dependencies: libgtk_dep,
   install: true
 )
+gtk_tools += gtk_builder_tool
 
 extra_update_icon_cache_objs = []
 if win32_enabled
@@ -1113,8 +1121,9 @@ gtk_update_icon_cache = executable(
   dependencies: libgtk_dep,
   install: true
 )
+gtk_tools += gtk_update_icon_cache
 
- gtk_query_immodules = executable(
+gtk_query_immodules = executable(
   'gtk-query-immodules-3.0',
   'queryimmodules.c',
   'gtkutils.c',
@@ -1122,6 +1131,7 @@ gtk_update_icon_cache = executable(
   dependencies: libgtk_dep,
   install: true
 )
+gtk_tools += gtk_query_immodules
 
 gtk_encode_symbolic_svg = executable(
   'gtk-encode-symbolic-svg',
@@ -1130,6 +1140,7 @@ gtk_encode_symbolic_svg = executable(
   dependencies: libgtk_dep,
   install: true
 )
+gtk_tools += gtk_encode_symbolic_svg
 
 gtk_launch = executable(
   'gtk-launch',
@@ -1138,3 +1149,8 @@ gtk_launch = executable(
   dependencies: libgtk_dep,
   install: true
 )
+gtk_tools += gtk_launch
+
+foreach tool: gtk_tools
+  meson.override_find_program(tool.name(), tool)
+endforeach

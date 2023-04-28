@@ -42,16 +42,16 @@ typedef float CGFloat;
 #define GDK_QUARTZ_ALLOC_POOL NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init]
 #define GDK_QUARTZ_RELEASE_POOL [pool release]
 
-#include <gdk/gdkprivate.h>
-#include <gdk/quartz/gdkquartz.h>
-#include <gdk/quartz/gdkdevicemanager-core-quartz.h>
-#include <gdk/quartz/gdkdnd-quartz.h>
-#include <gdk/quartz/gdkscreen-quartz.h>
-#include <gdk/quartz/gdkwindow-quartz.h>
+#include "../gdkprivate.h"
+#include "gdkquartz.h"
+#include "gdkdevicemanager-core-quartz.h"
+#include "gdkdnd-quartz.h"
+#include "gdkscreen-quartz.h"
+#include "gdkwindow-quartz.h"
 
 #include <gdk/gdk.h>
 
-#include "config.h"
+#include <config.h>
 
 extern GdkDisplay *_gdk_display;
 extern GdkScreen *_gdk_screen;
@@ -284,5 +284,10 @@ void     _gdk_quartz_window_change_property   (GdkWindow    *window,
 void     _gdk_quartz_window_delete_property   (GdkWindow    *window,
                                                GdkAtom       property);
 
+/* Display methods - frame clock */
+void        _gdk_quartz_display_add_frame_callback    (GdkDisplay             *display,
+                                                       GdkWindow              *window);
+void        _gdk_quartz_display_remove_frame_callback (GdkDisplay             *display,
+                                                       GdkWindow              *window);
 
 #endif /* __GDK_INTERNAL_QUARTZ_H__ */
