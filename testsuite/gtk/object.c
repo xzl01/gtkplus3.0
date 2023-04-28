@@ -330,6 +330,9 @@ main (int   argc,
 
   g_setenv ("GSETTINGS_BACKEND", "memory", TRUE);
 
+  /* when start test, not use dde-filedialog*/
+  g_setenv("_d_disable_filedialog", "true", TRUE);
+
   /* initialize test program */
   gtk_test_init (&argc, &argv);
   gtk_test_register_all_types ();
@@ -352,5 +355,11 @@ main (int   argc,
       }
 
   g_free (schema_dir);
-  return g_test_run ();
+
+  int result = g_test_run ();
+
+  /* when end test, unset the env _d_disable_filedialog*/
+  g_unsetenv("_d_disable_filedialog");
+
+  return result;
 }

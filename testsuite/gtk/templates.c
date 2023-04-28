@@ -351,6 +351,9 @@ main (int argc, char **argv)
   /* initialize test program */
   gtk_test_init (&argc, &argv);
 
+  /* when start test, not use dde-filedialog*/
+  g_setenv("_d_disable_filedialog", "true", TRUE);
+
   /* g_test_build_filename must be called after gtk_test_init */
   schema_dir = g_test_build_filename (G_TEST_BUILT, "", NULL);
   if (g_getenv ("GTK_TEST_MESON") == NULL)
@@ -391,6 +394,11 @@ main (int argc, char **argv)
 #endif
 
   g_free (schema_dir);
+  
+  int result = g_test_run();
 
-  return g_test_run();
+  /* when end test, unset the env _d_disable_filedialog*/
+  g_unsetenv("_d_disable_filedialog");
+
+  return result;
 }

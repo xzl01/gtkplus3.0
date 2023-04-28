@@ -283,6 +283,10 @@ gtk_file_chooser_dialog_class_init (GtkFileChooserDialogClass *class)
   gtk_widget_class_bind_template_callback (widget_class, file_chooser_widget_selection_changed);
 }
 
+__attribute__((weak))
+GDK_AVAILABLE_IN_ALL
+void _d_ddefiledialog_override_gtk_dialog();
+
 static void
 gtk_file_chooser_dialog_init (GtkFileChooserDialog *dialog)
 {
@@ -294,6 +298,9 @@ gtk_file_chooser_dialog_init (GtkFileChooserDialog *dialog)
 
   _gtk_file_chooser_set_delegate (GTK_FILE_CHOOSER (dialog),
                                   GTK_FILE_CHOOSER (dialog->priv->widget));
+
+  if (_d_ddefiledialog_override_gtk_dialog)
+    _d_ddefiledialog_override_gtk_dialog(dialog);
 }
 
 static GtkWidget *

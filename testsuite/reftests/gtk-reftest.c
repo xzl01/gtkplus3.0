@@ -413,6 +413,9 @@ main (int argc, char **argv)
    */
   g_setenv ("GDK_RENDERING", "image", FALSE);
 
+  /* when start test, not use dde-filedialog*/
+  g_setenv("_d_disable_filedialog", "true", TRUE);
+
   if (!parse_command_line (&argc, &argv))
     return 1;
 
@@ -453,6 +456,11 @@ main (int argc, char **argv)
    */
   chdir (basedir);
 
-  return g_test_run ();
+  int result = g_test_run ();
+
+  /* when end test, unset the env _d_disable_filedialog*/
+  g_unsetenv("_d_disable_filedialog");
+
+  return result;
 }
 
